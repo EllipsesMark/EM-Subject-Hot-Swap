@@ -1,0 +1,13 @@
+[project]
+name = "em-subject-hot-swap"
+description = "ComfyUI nodes for MiniMax H3 subject prompting, RefMods, and I2V workflows."
+version = "1.0.0"
+license = { file = "LICENSE" }
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/EllipsesMark/EM-Subject-Hot-Swap"
+
+[tool.comfy]
+PublisherId = "ellipsesmark"
+DisplayName = "EM Subject Hot Swap"
