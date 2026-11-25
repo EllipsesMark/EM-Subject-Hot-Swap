@@ -14,7 +14,7 @@ The separate `ComfyUI-H3-Subject-Hot-Swap` folder is an obsolete stub. Do not in
 3. Restart ComfyUI completely, then hard-refresh the browser tab.
 4. Search the node menu for **EM Subject Hot Swap** and **LLM (GGUF) - Loader**.
 
-Manual Git install, after this repository is published:
+Manual Git install:
 
 ```powershell
 cd C:\ComfyUI\custom_nodes
