@@ -603,6 +603,29 @@ def test_http_chat_uses_openai_compatible_route():
     assert request.call_args.args[0].full_url == "http://localhost:1234/v1/chat/completions"
 
 
+def test_hot_swap_forwards_audio_vae_to_mix_writer():
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse((Path(__file__).parent / "h3_subject_prompt" / "hot_swap_node.py").read_text(encoding="utf-8"))
+    calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "build"
+        and isinstance(node.func.value, ast.Call)
+        and isinstance(node.func.value.func, ast.Name)
+        and node.func.value.func.id == "H3SubjectPromptHybrid"
+    ]
+    assert len(calls) == 1
+    assert any(
+        keyword.arg == "audio_vae"
+        and isinstance(keyword.value, ast.Name)
+        and keyword.value.id == "audio_vae"
+        for keyword in calls[0].keywords
+    )
+
+
 def test_only_two_nodes_are_registered_for_users():
     import ast
     from pathlib import Path

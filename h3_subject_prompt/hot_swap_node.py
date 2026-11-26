@@ -201,7 +201,8 @@ class H3SubjectHotSwap:
             )
         elif mode == "mix":
             out = H3SubjectPromptHybrid().build(
-                clip, width, height, length, ref_image_size, blob, vae=vae, llm=llm,
+                clip, width, height, length, ref_image_size, blob,
+                vae=vae, audio_vae=audio_vae, llm=llm,
             )
         else:
             if vae is None:
