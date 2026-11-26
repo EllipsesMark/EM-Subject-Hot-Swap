@@ -182,6 +182,29 @@ def test_create_from_panel_requires_paths():
         assert "audio" in str(exc).lower() or "wav" in str(exc).lower()
 
 
+def test_audio_refmod_trim_uses_selected_seconds():
+    import numpy as np
+    from h3_subject_prompt.create_refmod import _audio_window_samples, _trim_audio_window
+
+    assert _audio_window_samples(10, 100, 1.5, 4.0) == (15, 40)
+    assert _audio_window_samples(10, 100, 2.0, 0) == (20, 100)
+    source = np.arange(100).reshape(1, 1, 100)
+    trimmed = _trim_audio_window({"waveform": source, "sample_rate": 10}, 1.5, 4.0)
+    assert trimmed["waveform"].shape == (1, 1, 25)
+    assert trimmed["waveform"][0, 0, 0] == 15
+    assert trimmed["waveform"][0, 0, -1] == 39
+
+
+def test_audio_refmod_trim_rejects_invalid_windows():
+    from h3_subject_prompt.create_refmod import _audio_window_samples
+    for start, end in ((-1, 2), (5, 4), (11, 0), (float("nan"), 0)):
+        try:
+            _audio_window_samples(10, 100, start, end)
+            assert False, f"expected invalid audio window for {start}, {end}"
+        except ValueError:
+            pass
+
+
 def test_draft_packet_follows_checked_mods():
     header, pictures = draft_request({
         "idea": "she sits",

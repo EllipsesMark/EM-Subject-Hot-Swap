@@ -7,6 +7,7 @@ multi-still or audio). Replaces the FolderLoader → Create Master → Save chai
 from __future__ import annotations
 
 import gc
+import math
 import os
 import re
 
@@ -699,6 +700,42 @@ def load_audio_dict(raw_path):
     return {"waveform": waveform, "sample_rate": int(sample_rate)}
 
 
+def _audio_window_samples(sample_rate, sample_count, start, end):
+    """Convert a seconds window into a validated half-open sample range."""
+    try:
+        start = float(start or 0)
+        end = float(end or 0)
+    except (TypeError, ValueError):
+        raise ValueError(f"{TAG}: audio trim points must be numbers of seconds") from None
+    if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end < 0:
+        raise ValueError(f"{TAG}: audio trim points must be finite, non-negative seconds")
+    sample_rate = int(sample_rate or 0)
+    sample_count = int(sample_count or 0)
+    if sample_rate <= 0 or sample_count <= 0:
+        raise ValueError(f"{TAG}: cannot trim audio with an empty waveform or invalid sample rate")
+    duration = sample_count / sample_rate
+    if start >= duration:
+        raise ValueError(f"{TAG}: audio trim start {start:g}s is past the end of the file")
+    end = duration if end == 0 else min(end, duration)
+    if end <= start:
+        raise ValueError(f"{TAG}: audio trim end {end:g}s must be after start {start:g}s")
+    first = max(0, min(sample_count - 1, round(start * sample_rate)))
+    last = max(first + 1, min(sample_count, round(end * sample_rate)))
+    return first, last
+
+
+def _trim_audio_window(audio, start=0, end=0):
+    """Trim a loaded Comfy AUDIO dict before it is passed to the audio VAE."""
+    waveform = audio.get("waveform") if isinstance(audio, dict) else None
+    shape = getattr(waveform, "shape", ())
+    if not shape:
+        raise ValueError(f"{TAG}: loaded audio has no waveform to trim")
+    first, last = _audio_window_samples(audio.get("sample_rate"), shape[-1], start, end)
+    trimmed = dict(audio)
+    trimmed["waveform"] = waveform[..., first:last]
+    return trimmed
+
+
 def _panel_stem(name, folder="", paths="", audio_path=""):
     raw = str(name or "").strip()
     if raw:
@@ -823,7 +860,11 @@ def create_from_panel(data):
     audio = None
     audio_vae = None
     if need_audio:
-        audio = load_audio_dict(audio_path)
+        audio = _trim_audio_window(
+            load_audio_dict(audio_path),
+            data.get("audio_start", 0),
+            data.get("audio_end", 0),
+        )
         audio_vae = load_audio_vae()
         if audio_vae is None:
             raise ValueError(

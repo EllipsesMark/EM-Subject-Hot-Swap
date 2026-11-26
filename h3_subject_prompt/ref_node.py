@@ -473,6 +473,8 @@ def register_routes():
                 "role": _text("role", "identity"),
                 "dest_folder": _text("dest_folder"),
                 "split": _bool("split"),
+                "audio_start": _text("audio_start", "0"),
+                "audio_end": _text("audio_end", "0"),
                 "layout": _text("layout", "separate_pictures"),
                 "pack": _text("pack", "single"),
                 "fit_mode": _text("fit_mode", "crop"),
