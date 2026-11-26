@@ -197,12 +197,16 @@ const CSS = `
 .h3h-pick-folder.on { background:#1d3340; color:#46b4e6; }
 .h3h-pick-count { color:#777; font-size:10px; }
 .h3h-pick-pane { flex:1; min-width:0; overflow:auto; padding:8px; display:grid; grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); gap:8px; align-content:start; }
+.h3h-pick-pane.audio { grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); }
 .h3h-pick-card { position:relative; display:flex; flex-direction:column; gap:4px; cursor:pointer; border-radius:4px; padding:3px; border:1px solid transparent; }
 .h3h-pick-card:hover { background:#262626; }
 .h3h-pick-card.on { border-color:#46b4e6; background:#1d3340; }
 .h3h-pick-card img { width:100%; height:160px; object-fit:contain; border-radius:3px; background:#111; }
 .h3h-pick-name { font-size:10px; color:#bbb; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .h3h-pick-desc { font-size:10px; color:#888; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.h3h-pick-audio { display:flex; align-items:center; gap:6px; min-width:0; }
+.h3h-pick-audio audio { flex:1 1 auto; width:100%; min-width:0; height:34px; }
+.h3h-pick-audio .h3h-btn { flex:0 0 auto; }
 .h3h-pick-meta { font-size:10px; color:#46b4e6; }
 .h3h-pick-del { position:absolute; top:6px; right:6px; z-index:2; background:#3a1a1a; border:1px solid #a33;
   color:#f0a0a0; border-radius:4px; font:10px sans-serif; padding:1px 6px; cursor:pointer; opacity:0; }
@@ -1525,7 +1529,7 @@ function setup(node, opts = null) {
     newFolderBtn.style.display = mode === "image" || mode === "audio" ? "none" : "";
     folderActs.appendChild(newFolderBtn);
     folders.append(folderList, folderActs);
-    const pane = el("div", "h3h-pick-pane");
+    const pane = el("div", "h3h-pick-pane" + (mode === "audio" ? " audio" : ""));
     split.append(folders, pane);
     const foot = el("div", "h3h-pick-foot");
     foot.style.display = "flex";
@@ -1617,14 +1621,26 @@ function setup(node, opts = null) {
           img.addEventListener("error", () => img.remove());
           card.appendChild(img);
         } else if (mode === "audio") {
+          const audioRow = el("div", "h3h-pick-audio");
           const player = document.createElement("audio");
           player.controls = true;
           player.preload = "none";
           player.src = imageView(name);
-          player.style.width = "100%";
           player.addEventListener("click", (event) => event.stopPropagation());
           player.addEventListener("pointerdown", (event) => event.stopPropagation());
-          card.appendChild(player);
+          const use = el("button", "h3h-btn", current === name ? "Selected" : "Use");
+          use.title = "Load this audio clip into the Mix row";
+          stop(use);
+          use.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onPick(item);
+            dismiss();
+            renderList();
+            commit();
+          });
+          audioRow.append(player, use);
+          card.appendChild(audioRow);
         } else if (item.has_looks || item.has_preview) {
           const img = document.createElement("img");
           img.alt = "";
@@ -1916,7 +1932,7 @@ function setup(node, opts = null) {
     const play = el("button", "h3h-btn", "Play");
     const endLabel = el("span");
     stop(canvas); stop(play);
-    times.append(startLabel, selectedLabel, play, endLabel);
+    times.append(play, startLabel, selectedLabel, endLabel);
     box.append(canvas, times);
 
     let info = null;
@@ -2961,7 +2977,7 @@ function setup(node, opts = null) {
     const audioPlay = el("button", "h3h-btn", "Play");
     stop(audioPlay);
     const audioEndLabel = el("span", null, "0:00.0");
-    audioTimes.append(audioStartLabel, audioSelectionLabel, audioPlay, audioEndLabel);
+    audioTimes.append(audioPlay, audioStartLabel, audioSelectionLabel, audioEndLabel);
     audioWaveBox.append(audioWave, audioTimes);
     audioBlock.appendChild(audioWaveBox);
 

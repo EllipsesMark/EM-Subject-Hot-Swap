@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import re
 
+from .assemble import speaker_ids_by_subject
+
 TASKS = [
     "reference generation",
     "video editing + reference generation",
@@ -416,7 +418,7 @@ def _retention_body(marker, keep):
     return f"{marker} - {_join(*pieces)}"
 
 
-def definition_lines(item, outfits=None):
+def definition_lines(item, outfits=None, speaker_ids=None):
     """subject_definitions: who only here; keep stays in retention.
 
     Identity: ``<Subject 1> is {who}, wearing <Subject 2>. <Video 1>…``
@@ -476,9 +478,11 @@ def definition_lines(item, outfits=None):
         lines = [lead]
 
     if item.get("voice"):
+        speaker_id = (speaker_ids or {}).get(sn)
+        speaker = f" ({speaker_id})" if speaker_id else ""
         lines.append(
             f"<Audio {item['voice']}> is the voice-timbre reference for "
-            f"<Subject {sn}>."
+            f"<Subject {sn}>{speaker}."
         )
     return lines
 
@@ -588,11 +592,13 @@ def _map_rows(assigned):
 def build_prompt(data):
     data = migrate_state(data if isinstance(data, dict) else {})
     assigned = assign(data.get("mods") or [])
+    detailed = _detailed(data)
+    speaker_ids = speaker_ids_by_subject(detailed)
     definitions = []
     retentions = []
     for item in assigned:
         outfits = _outfits_for(item, assigned)
-        definitions.extend(definition_lines(item, outfits))
+        definitions.extend(definition_lines(item, outfits, speaker_ids))
         retentions.extend(retention_lines(item, outfits))
 
     # Same six MiniMax sections / order as RefMod assemble — only the
@@ -610,7 +616,7 @@ def build_prompt(data):
         "\n".join(retentions) if retentions else "N/A",
         "",
         "detailed_description:",
-        _detailed(data),
+        detailed,
         "",
         f"overall_soundscape: {sound}",
         "",

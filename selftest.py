@@ -106,12 +106,16 @@ def test_draft_speaker_ids_follow_first_vocalization_order():
     assert "<Audio 1> is the voice-timbre reference for <Subject 1>." in locked
     assert "<Audio 2> is the voice-timbre reference for <Subject 2>." in locked
     assert "(S1)" not in locked and "(S2)" not in locked
+    assert "Voice-reference bindings (authoritative; do not change):\n<Subject 1> -> <Audio 1>\n<Subject 2> -> <Audio 2>" in header
+    assert "Audio numbers do not determine S-ID order" in header
+    assert "final prompt assembly reuses that same ID in the matching <Audio N> definition" in draft_system("qwen")
+    assert "cite only the Audio tag explicitly mapped to that subject" in draft_system("qwen")
     assert "first vocal-event order" in header.lower()
     assert "Do not use Subject, Audio, or RefMod row order" in header
     assert "if <Subject 2> speaks first and <Subject 1> replies, they are (S1) and (S2)" in header
     for model_name in ("qwen", "gemma"):
         guide = draft_system(model_name)
-        assert "first vocal event" in guide
+        assert "first actual vocal event" in guide
         assert "RefMod row order" in guide
         assert "Reuse (S1)" not in guide
 
@@ -370,6 +374,40 @@ def test_hybrid_visual_can_pair_trimmed_raw_audio():
     assert audio_map["wire"] == "voice_audio"
     assert audio_map["file"] == "voices/line.wav"
     assert audio_map["start"] == 1.25 and audio_map["end"] == 3.75
+
+
+def test_hybrid_definition_reuses_first_event_speaker_ids():
+    from h3_subject_prompt.hybrid_assemble import build_prompt
+
+    mods = [
+        {
+            "enabled": True,
+            "source": "refmod",
+            "refmod": "first_visual",
+            "voice_refmod": "first_voice",
+            "concept": "identity",
+            "strength": 1.0,
+        },
+        {
+            "enabled": True,
+            "source": "refmod",
+            "refmod": "second_visual",
+            "voice_refmod": "second_voice",
+            "concept": "identity",
+            "strength": 1.0,
+        },
+    ]
+    prompt = build_prompt({
+        "mods": mods,
+        "detailed": (
+            "[Shot 1] <Subject 2> (S1) speaks first. "
+            "<Subject 1> (S2) replies."
+        ),
+    })["prompt"]
+    assert "<Audio 1> is the voice-timbre reference for <Subject 1> (S2)." in prompt
+    assert "<Audio 2> is the voice-timbre reference for <Subject 2> (S1)." in prompt
+    retention = prompt.split("retention_analysis:\n", 1)[1].split("\n\ndetailed_description:", 1)[0]
+    assert "(S1)" not in retention and "(S2)" not in retention
 
 
 def test_hybrid_legacy_voice_refmod_pairing_stays_compatible():

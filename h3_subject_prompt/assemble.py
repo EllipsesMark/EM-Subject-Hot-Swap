@@ -346,7 +346,18 @@ def _retention_body(marker, keep):
     return f"{marker} - {_join(*pieces)}"
 
 
-def definition_lines(item):
+_SUBJECT_SPEAKER = re.compile(r"<\s*Subject\s+(\d+)\s*>\s*\(\s*(S\d+)\s*\)", re.I)
+
+
+def speaker_ids_by_subject(detailed):
+    """Reuse the first speaker ID attached to each subject in shot order."""
+    speaker_ids = {}
+    for match in _SUBJECT_SPEAKER.finditer(str(detailed or "")):
+        speaker_ids.setdefault(int(match.group(1)), match.group(2).upper())
+    return speaker_ids
+
+
+def definition_lines(item, speaker_ids=None):
     row = item["row"]
     tags = _tags_of(item)
     who = _who(row, tags)
@@ -373,9 +384,11 @@ def definition_lines(item):
         )
     lines = [lead]
     if item.get("voice"):
+        speaker_id = (speaker_ids or {}).get(sn)
+        speaker = f" ({speaker_id})" if speaker_id else ""
         lines.append(
             f"<Audio {item['voice']}> is the voice-timbre reference for "
-            f"<Subject {sn}>."
+            f"<Subject {sn}>{speaker}."
         )
     return lines
 
@@ -455,17 +468,18 @@ def build_prompt(data):
     data = migrate_state(data if isinstance(data, dict) else {})
     assigned = assign(data.get("mods") or [])
     reinforced = _reinforced(data)
-    definitions = []
-    retentions = []
-    for item in assigned:
-        definitions.extend(definition_lines(item))
-        retentions.extend(retention_lines(item))
-
-    summary = _summary_line(data)
     detailed = _detailed(data)
     # Defs + retention already carry who/keep. Reinforce only fills detailed.
     if reinforced:
         detailed = reinforce_detailed(detailed, assigned)
+    speaker_ids = speaker_ids_by_subject(detailed)
+    definitions = []
+    retentions = []
+    for item in assigned:
+        definitions.extend(definition_lines(item, speaker_ids))
+        retentions.extend(retention_lines(item))
+
+    summary = _summary_line(data)
     sound = _clean(data.get("soundscape")) or "N/A"
     music = _clean(data.get("music")) or "N/A"
 
@@ -496,7 +510,7 @@ def build_prompt(data):
         lines.append({
             "index": item["index"],
             "tag": tag,
-            "definition": "\n".join(definition_lines(item)),
+            "definition": "\n".join(definition_lines(item, speaker_ids)),
             "retention": "\n".join(retention_lines(item)),
         })
 

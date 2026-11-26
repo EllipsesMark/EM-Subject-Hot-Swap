@@ -235,6 +235,25 @@ const CSS = `
 .h3sr-apop-it:hover { background:#2f2f2f; }
 .h3sr-apop-it.on { color:#46b4e6; }
 .h3sr-apop-em { padding:6px 10px; color:#888; }
+.h3sr-apick-blanket { position:fixed; inset:0; z-index:10000; background:rgba(0,0,0,.38); }
+.h3sr-apick { position:fixed; z-index:10001; display:flex; flex-direction:column;
+  width:min(920px, calc(100vw - 16px)); height:min(640px, calc(100vh - 16px));
+  background:#1a1a1a; color:#ddd; border:1px solid #555; border-radius:8px;
+  box-shadow:0 10px 28px rgba(0,0,0,.6); overflow:hidden; font:12px/1.3 sans-serif; }
+.h3sr-apick-head { display:flex; align-items:center; gap:6px; padding:8px; border-bottom:1px solid #333; }
+.h3sr-apick-head input { flex:1; min-width:0; background:#141414; border:1px solid #444; border-radius:4px; color:#ddd; padding:5px 8px; }
+.h3sr-apick-split { flex:1; min-height:0; display:flex; }
+.h3sr-apick-folders { width:148px; flex:none; overflow:auto; background:#141414; border-right:1px solid #333; }
+.h3sr-apick-pane { flex:1; min-width:0; overflow:auto; padding:8px; display:grid;
+  grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:8px; align-content:start; }
+.h3sr-apick-card { min-width:0; display:flex; flex-direction:column; gap:6px; padding:7px;
+  border:1px solid #3a3a3a; border-radius:5px; background:#202020; }
+.h3sr-apick-card.on { border-color:#46b4e6; background:#1d3340; }
+.h3sr-apick-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#bbb; font-size:11px; }
+.h3sr-apick-player { width:100%; min-width:0; height:34px; }
+.h3sr-apick-use { align-self:flex-end; }
+.h3sr-apick-foot { display:flex; align-items:center; gap:8px; padding:6px 8px; border-top:1px solid #333; color:#888; }
+.h3sr-apick-empty { grid-column:1 / -1; color:#888; padding:12px; }
 .h3sr-vprev { width:100%; max-height:150px; background:#000; border:1px solid #444; border-radius:4px; object-fit:contain; }
 .h3sr-wavebox { background:#1d1d1d; border:1px solid #444; border-radius:4px; padding:6px; display:flex; flex-direction:column; gap:4px; }
 .h3sr-wave { width:100%; height:64px; display:block; cursor:ew-resize; touch-action:none; }
@@ -676,10 +695,105 @@ async function refreshVideos() {
 }
 
 function openAudioPicker(anchor, current, onPick) {
-  openListPicker(anchor, current, onPick, {
-    load: async () => { await refreshAudio(); return audioFiles.filter((item) => !item.folder); },
-    empty: "no sound files in ComfyUI's input folder",
+  document.querySelectorAll(".h3sr-apick, .h3sr-apick-blanket").forEach((node) => node.remove());
+  const blanket = el("div", "h3sr-apick-blanket");
+  const popup = el("div", "h3sr-apick");
+  stop(popup);
+  const head = el("div", "h3sr-apick-head");
+  const search = document.createElement("input");
+  search.type = "text";
+  search.placeholder = "Filter audio clips…";
+  stop(search);
+  const closeBtn = el("button", "h3sr-btn", "Close");
+  stop(closeBtn);
+  head.append(search, closeBtn);
+  const split = el("div", "h3sr-apick-split");
+  const folders = el("div", "h3sr-apick-folders");
+  const pane = el("div", "h3sr-apick-pane");
+  split.append(folders, pane);
+  const foot = el("div", "h3sr-apick-foot");
+  const status = el("span", null, "Loading audio clips…");
+  foot.appendChild(status);
+  popup.append(head, split, foot);
+  document.body.append(blanket, popup);
+  popup.style.left = "50%";
+  popup.style.top = "50%";
+  popup.style.transform = "translate(-50%, -50%)";
+
+  let active = current ? (current.includes("/") ? current.split("/").slice(0, -1).join("/") : "") : "__all";
+  let query = "";
+  const dismiss = () => {
+    blanket.remove();
+    popup.remove();
+    document.removeEventListener("keydown", onKey, true);
+  };
+  const onKey = (event) => { if (event.key === "Escape") dismiss(); };
+  blanket.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    dismiss();
   });
+  closeBtn.addEventListener("click", dismiss);
+  document.addEventListener("keydown", onKey, true);
+
+  function render() {
+    folders.innerHTML = "";
+    pane.innerHTML = "";
+    const folderCounts = new Map([["__all", audioFiles.length], ["", 0]]);
+    for (const folder of audioFolders) folderCounts.set(folder, 0);
+    for (const item of audioFiles) {
+      const folder = item.folder || "";
+      folderCounts.set(folder, (folderCounts.get(folder) || 0) + 1);
+    }
+    for (const [folder, count] of folderCounts) {
+      const row = el("div", "h3sr-pick-folder" + (folder === active && !query ? " on" : ""));
+      row.append(el("span", null, folder === "__all" ? "All" : (folder || "root")), el("span", "h3sr-pick-count", String(count)));
+      row.addEventListener("click", () => { active = folder; query = ""; search.value = ""; render(); });
+      folders.appendChild(row);
+    }
+    const term = query.trim().toLowerCase();
+    const shown = audioFiles.filter((item) => {
+      if (term) return (item.name + " " + item.path).toLowerCase().includes(term);
+      return active === "__all" || (item.folder || "") === active;
+    });
+    status.textContent = `${shown.length} audio clips`;
+    if (!shown.length) {
+      pane.appendChild(el("div", "h3sr-apick-empty", "No audio clips in this folder."));
+      return;
+    }
+    for (const item of shown) {
+      const card = el("div", "h3sr-apick-card" + (item.path === current ? " on" : ""));
+      const name = el("div", "h3sr-apick-name", item.path);
+      name.title = item.path;
+      const player = document.createElement("audio");
+      player.className = "h3sr-apick-player";
+      player.controls = true;
+      player.preload = "none";
+      player.src = viewUrl(item.path);
+      player.addEventListener("pointerdown", (event) => event.stopPropagation());
+      player.addEventListener("click", (event) => event.stopPropagation());
+      const use = el("button", "h3sr-btn h3sr-apick-use", item.path === current ? "Selected" : "Use clip");
+      stop(use);
+      use.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        dismiss();
+        onPick(item.path);
+      });
+      card.append(name, player, use);
+      pane.appendChild(card);
+    }
+  }
+
+  search.addEventListener("input", () => { query = search.value; render(); });
+  refreshAudio().then(() => {
+    if (current && !audioFiles.some((item) => item.path === current)) {
+      audioFiles.unshift({ path: current, folder: "", name: current.split(/[\\/]/).pop() });
+    }
+    if (popup.isConnected) render();
+  });
+  render();
+  search.focus();
 }
 
 function openVideoPicker(anchor, current, onPick) {
@@ -1505,7 +1619,7 @@ function setup(node, opts = null) {
   function clothingSection(row, snipEl) {
     if (roleOf(row) !== "person" || (row.kind || "picture") !== "picture") return null;
     const wrap = el("div", "h3sr-sec");
-    wrap.appendChild(el("div", "h3sr-lbl", "clothing"));
+    wrap.appendChild(el("div", "h3sr-lbl", "outfit"));
     const tied = tiedSets(row.id);
     if (tied.length) {
       const setLine = el("div", "h3sr-line");
@@ -1576,6 +1690,13 @@ function setup(node, opts = null) {
     saveOutfit.addEventListener("click", () => storeOutfit(wear.value));
     line.append(wear, outfit, saveOutfit);
     wrap.appendChild(line);
+    const addLine = el("div", "h3sr-line");
+    const addClothing = el("button", "h3sr-btn", "Add clothing");
+    addClothing.title = "Tie a wardrobe image set to this character, like Mix";
+    stop(addClothing);
+    addClothing.addEventListener("click", () => openWardrobe(addClothing, row));
+    addLine.appendChild(addClothing);
+    wrap.appendChild(addLine);
     return wrap;
   }
 
@@ -1981,7 +2102,7 @@ function setup(node, opts = null) {
     const endLabel = el("span", null, "");
     const play = el("button", "h3sr-btn", "Play");
     stop(play);
-    times.append(startLabel, selLabel, play, endLabel);
+    times.append(play, startLabel, selLabel, endLabel);
     box.append(canvas, times);
     stop(canvas);
 
