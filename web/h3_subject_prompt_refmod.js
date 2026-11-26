@@ -117,6 +117,10 @@ const CSS = `
   padding:0; line-height:16px; font-size:12px; background:#3d1e1e; border-color:#a33; color:#f0a0a0; }
 .h3m-create-audio-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
 .h3m-create-audio-name { color:#aaa; font:11px sans-serif; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
+.h3m-create-wavebox { background:#1d1d1d; border:1px solid #444; border-radius:4px; padding:6px; display:flex; flex-direction:column; gap:4px; }
+.h3m-create-wave { width:100%; height:64px; display:block; cursor:ew-resize; touch-action:none; }
+.h3m-create-times { display:flex; align-items:center; justify-content:space-between; gap:6px; font:10px sans-serif; color:#888; }
+.h3m-create-times .sel { color:#46b4e6; }
 .h3m-create-path-block { display:none; flex-direction:column; gap:4px; }
 .h3m-create-path-block.open { display:flex; }
 .h3m-looks { position:fixed; z-index:10060; inset:0; background:rgba(0,0,0,.78);
@@ -1241,6 +1245,235 @@ function setup(node, opts = null) {
     audioRow.append(audioPick, audioName, audioClear);
     const audioBlock = el("div", null);
     audioBlock.append(audioLab, audioRow);
+    const audioWaveBox = el("div", "h3m-create-wavebox");
+    audioWaveBox.style.display = "none";
+    const audioWave = document.createElement("canvas");
+    audioWave.className = "h3m-create-wave";
+    audioWave.title = "Drag either edge to trim. Drag the middle to slide the selection.";
+    stop(audioWave);
+    const audioTimes = el("div", "h3m-create-times");
+    const audioStartLabel = el("span", null, "0:00.0");
+    const audioSelectionLabel = el("span", "sel", "0:00.0 selected");
+    const audioPlay = el("button", "h3m-btn", "Play");
+    stop(audioPlay);
+    const audioEndLabel = el("span", null, "0:00.0");
+    audioTimes.append(audioPlay, audioStartLabel, audioSelectionLabel, audioEndLabel);
+    audioWaveBox.append(audioWave, audioTimes);
+    audioBlock.appendChild(audioWaveBox);
+
+    let audioPreviewUrl = "";
+    let audioDuration = 0;
+    let audioPeaks = null;
+    let audioStart = 0;
+    let audioEnd = 0;
+    let audioPreviewPlayer = null;
+    let audioPreviewFrame = 0;
+    let audioDecodeGeneration = 0;
+
+    function createAudioWindow() {
+      const duration = audioDuration || 1;
+      const start = Math.max(0, Number(audioStart) || 0);
+      let end = Number(audioEnd) || 0;
+      if (!(end > start)) end = duration;
+      end = Math.min(duration, Math.max(start, end));
+      return { start: Math.min(start, Math.max(0, end - 0.05)), end };
+    }
+
+    function formatCreateAudioTime(seconds) {
+      const value = Math.max(0, Number(seconds) || 0);
+      const minutes = Math.floor(value / 60);
+      return minutes + ":" + (value - minutes * 60).toFixed(1).padStart(4, "0");
+    }
+
+    function paintCreateAudioWave() {
+      const cssWidth = audioWave.clientWidth || 1;
+      const cssHeight = audioWave.clientHeight || 64;
+      const dpr = window.devicePixelRatio || 1;
+      const width = Math.max(1, Math.round(cssWidth * dpr));
+      const height = Math.max(1, Math.round(cssHeight * dpr));
+      if (audioWave.width !== width) audioWave.width = width;
+      if (audioWave.height !== height) audioWave.height = height;
+      const ctx = audioWave.getContext("2d");
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cssWidth, cssHeight);
+      const win = createAudioWindow();
+      const from = audioDuration ? win.start / audioDuration : 0;
+      const to = audioDuration ? win.end / audioDuration : 1;
+      const x0 = from * cssWidth;
+      const x1 = to * cssWidth;
+      if (audioPeaks) {
+        ctx.fillStyle = "rgba(70,180,230,0.12)";
+        ctx.fillRect(x0, 0, Math.max(0, x1 - x0), cssHeight);
+        const bandWidth = cssWidth / audioPeaks.length;
+        const mid = cssHeight / 2;
+        for (let i = 0; i < audioPeaks.length; i++) {
+          const x = i * bandWidth;
+          const selected = x + bandWidth / 2 >= x0 && x + bandWidth / 2 <= x1;
+          ctx.fillStyle = selected ? "#46b4e6" : "#5a5a5a";
+          const barHeight = Math.max(1, audioPeaks[i] * (cssHeight - 6));
+          ctx.fillRect(x + bandWidth * 0.15, mid - barHeight / 2, Math.max(0.7, bandWidth * 0.7), barHeight);
+        }
+      }
+      for (const x of [x0, x1]) {
+        ctx.fillStyle = "#46b4e6";
+        ctx.fillRect(Math.max(0, Math.min(cssWidth - 3, x - 1.5)), 0, 3, cssHeight);
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(Math.max(0, Math.min(cssWidth - 5, x - 2.5)), cssHeight * 0.36, 5, cssHeight * 0.28);
+      }
+      if (audioPreviewPlayer && audioDuration) {
+        const playX = (audioPreviewPlayer.currentTime / audioDuration) * cssWidth;
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(Math.max(0, Math.min(cssWidth - 2, playX - 1)), 0, 2, cssHeight);
+      }
+      audioStartLabel.textContent = formatCreateAudioTime(win.start);
+      audioSelectionLabel.textContent = formatCreateAudioTime(Math.max(0, win.end - win.start)) + " selected";
+      audioEndLabel.textContent = formatCreateAudioTime(audioDuration ? win.end : 0);
+    }
+
+    function stopCreateAudioPreview() {
+      if (audioPreviewFrame) {
+        cancelAnimationFrame(audioPreviewFrame);
+        audioPreviewFrame = 0;
+      }
+      if (audioPreviewPlayer) {
+        try { audioPreviewPlayer.pause(); } catch (e) { /* already stopped */ }
+        audioPreviewPlayer = null;
+      }
+      audioPlay.textContent = "Play";
+      paintCreateAudioWave();
+    }
+
+    function clearAudioPreview() {
+      audioDecodeGeneration += 1;
+      stopCreateAudioPreview();
+      if (audioPreviewUrl) URL.revokeObjectURL(audioPreviewUrl);
+      audioPreviewUrl = "";
+      audioDuration = 0;
+      audioPeaks = null;
+      audioStart = 0;
+      audioEnd = 0;
+      audioWaveBox.style.display = "none";
+      paintCreateAudioWave();
+    }
+
+    async function loadCreateAudioWave(file) {
+      const generation = ++audioDecodeGeneration;
+      audioWaveBox.style.display = "";
+      audioPeaks = null;
+      audioDuration = 0;
+      paintCreateAudioWave();
+      const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextCtor) return;
+      let context;
+      try {
+        context = new AudioContextCtor();
+        const buffer = await context.decodeAudioData(await file.arrayBuffer());
+        if (generation !== audioDecodeGeneration || !audioWaveBox.isConnected) return;
+        audioDuration = buffer.duration || 0;
+        const buckets = 240;
+        const peaks = new Float32Array(buckets);
+        const channels = Math.min(buffer.numberOfChannels, 2);
+        const perBucket = buffer.length / buckets;
+        for (let channel = 0; channel < channels; channel++) {
+          const samples = buffer.getChannelData(channel);
+          for (let i = 0; i < buckets; i++) {
+            const from = Math.floor(i * perBucket);
+            const to = Math.min(samples.length, Math.floor((i + 1) * perBucket));
+            const stride = Math.max(1, Math.floor((to - from) / 400));
+            let peak = 0;
+            for (let j = from; j < to; j += stride) peak = Math.max(peak, Math.abs(samples[j]));
+            peaks[i] = Math.max(peaks[i], peak);
+          }
+        }
+        let max = 0;
+        for (const peak of peaks) max = Math.max(max, peak);
+        if (max > 0.0001) for (let i = 0; i < buckets; i++) peaks[i] /= max;
+        audioPeaks = peaks;
+        paintCreateAudioWave();
+      } catch (e) {
+        status.textContent = "Waveform preview unavailable; the full file can still be encoded.";
+      } finally {
+        try { await context?.close(); } catch (e) { /* decoded buffer is independent */ }
+      }
+    }
+
+    audioPlay.addEventListener("click", () => {
+      if (audioPreviewPlayer && !audioPreviewPlayer.paused) {
+        stopCreateAudioPreview();
+        return;
+      }
+      if (!audioPreviewUrl) return;
+      stopCreateAudioPreview();
+      const player = new Audio(audioPreviewUrl);
+      audioPreviewPlayer = player;
+      const tick = () => {
+        if (audioPreviewPlayer !== player) return;
+        const win = createAudioWindow();
+        if (!audioWaveBox.isConnected || player.currentTime >= win.end - 0.03) {
+          stopCreateAudioPreview();
+          return;
+        }
+        paintCreateAudioWave();
+        audioPreviewFrame = requestAnimationFrame(tick);
+      };
+      player.addEventListener("loadedmetadata", () => {
+        if (audioPreviewPlayer !== player) return;
+        const win = createAudioWindow();
+        try { player.currentTime = win.start; } catch (e) { /* not seekable yet */ }
+        player.play().then(() => {
+          if (audioPreviewPlayer !== player) return;
+          audioPlay.textContent = "Stop";
+          audioPreviewFrame = requestAnimationFrame(tick);
+        }).catch(() => stopCreateAudioPreview());
+      }, { once: true });
+      player.addEventListener("ended", () => {
+        if (audioPreviewPlayer === player) stopCreateAudioPreview();
+      }, { once: true });
+    });
+
+    audioWave.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || !audioDuration) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const bounds = audioWave.getBoundingClientRect();
+      const xOf = (clientX) => Math.max(0, Math.min(audioDuration, ((clientX - bounds.left) / bounds.width) * audioDuration));
+      let win = createAudioWindow();
+      const x = xOf(e.clientX);
+      let zone = "jump";
+      if (Math.abs(x - win.start) <= audioDuration * (8 / bounds.width)) zone = "start";
+      else if (Math.abs(x - win.end) <= audioDuration * (8 / bounds.width)) zone = "end";
+      else if (x > win.start && x < win.end) zone = "move";
+      const origin = x;
+      const originStart = win.start;
+      const originEnd = win.end;
+      const move = (ev) => {
+        ev.preventDefault();
+        const at = xOf(ev.clientX);
+        if (zone === "start") win.start = Math.min(at, win.end - 0.1);
+        else if (zone === "end") win.end = Math.max(at, win.start + 0.1);
+        else if (zone === "move") {
+          const span = originEnd - originStart;
+          win.start = Math.max(0, Math.min(audioDuration - span, originStart + at - origin));
+          win.end = win.start + span;
+        } else {
+          const span = Math.max(0.1, originEnd - originStart);
+          win.start = Math.max(0, Math.min(audioDuration - span, at - span / 2));
+          win.end = win.start + span;
+        }
+        audioStart = Math.round(win.start * 100) / 100;
+        audioEnd = Math.round(win.end * 100) / 100;
+        paintCreateAudioWave();
+      };
+      const up = () => {
+        audioWave.releasePointerCapture?.(e.pointerId);
+        document.removeEventListener("pointermove", move);
+        document.removeEventListener("pointerup", up);
+      };
+      audioWave.setPointerCapture?.(e.pointerId);
+      document.addEventListener("pointermove", move);
+      document.addEventListener("pointerup", up);
+    });
 
     function revokePhotos() {
       for (const entry of photoFiles) {
@@ -1291,14 +1524,18 @@ function setup(node, opts = null) {
       }
     }
     function setAudio(file) {
-      audioFile = file && isAudio(file) ? file : (file || null);
-      if (file && !isAudio(file)) {
+      clearAudioPreview();
+      audioFile = file && isAudio(file) ? file : null;
+      if (file && !audioFile) {
         status.className = "h3m-create-status alert";
         status.textContent = "That isn’t an audio file.";
-        audioFile = null;
       }
       audioName.textContent = audioFile ? audioFile.name : "No voice file";
       audioClear.style.display = audioFile ? "" : "none";
+      if (audioFile) {
+        audioPreviewUrl = URL.createObjectURL(audioFile);
+        loadCreateAudioWave(audioFile);
+      }
     }
 
     drop.addEventListener("click", () => photoInput.click());
@@ -1456,6 +1693,7 @@ function setup(node, opts = null) {
     function dismiss() {
       if (encoding) return;
       revokePhotos();
+      clearAudioPreview();
       blanket.remove();
       panel.remove();
       document.removeEventListener("keydown", onKey, true);
@@ -1579,6 +1817,8 @@ function setup(node, opts = null) {
           form.append("role", roleSel.value);
           form.append("dest_folder", destSel.value || "");
           form.append("split", kind === "both" && splitBox.checked ? "1" : "0");
+          form.append("audio_start", String(audioStart));
+          form.append("audio_end", String(audioEnd));
           form.append("layout", layout.value);
           form.append("pack", pack.value);
           form.append("fit_mode", fit.value);
@@ -1602,6 +1842,8 @@ function setup(node, opts = null) {
             folder: pathIn.value.trim(),
             paths: "",
             audio_path: audioIn.value.trim(),
+            audio_start: audioStart,
+            audio_end: audioEnd,
             name: nameIn.value.trim(),
             description: descIn.value.trim(),
             role: roleSel.value,
