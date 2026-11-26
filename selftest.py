@@ -83,10 +83,37 @@ def test_voice_on_identity_row():
         _mod(voice_refmod="hero_audio"),
     ]})
     prompt = result["prompt"]
-    assert "<Audio 1> is the voice-timbre reference for <Subject 1> (S1)." in prompt
+    assert "<Audio 1> is the voice-timbre reference for <Subject 1>." in prompt
+    assert "<Subject 1> (S1)" not in prompt
     assert "[reference generation + audio reference]" in prompt
     labels = [row["label"] for row in result["map"]]
     assert labels == ["Video 1", "Audio 1"]
+
+
+def test_draft_speaker_ids_follow_first_vocalization_order():
+    from h3_subject_prompt.vision import draft_request, draft_system
+
+    mods = [
+        _mod(refmod="first_visual", voice_refmod="first_voice", who="the first person"),
+        _mod(refmod="second_visual", voice_refmod="second_voice", who="the second person"),
+    ]
+    header, _pictures = draft_request({
+        "idea": '<Subject 2> looks to <Subject 1> and says "are you ok"; '
+        '<Subject 1> responds "yeah, no, I\'m good".',
+        "mods": mods,
+    })
+    locked = header.split("Locked subject lines:\n", 1)[1].split("\n\nLocked retention lines:", 1)[0]
+    assert "<Audio 1> is the voice-timbre reference for <Subject 1>." in locked
+    assert "<Audio 2> is the voice-timbre reference for <Subject 2>." in locked
+    assert "(S1)" not in locked and "(S2)" not in locked
+    assert "first vocal-event order" in header.lower()
+    assert "Do not use Subject, Audio, or RefMod row order" in header
+    assert "if <Subject 2> speaks first and <Subject 1> replies, they are (S1) and (S2)" in header
+    for model_name in ("qwen", "gemma"):
+        guide = draft_system(model_name)
+        assert "first vocal event" in guide
+        assert "RefMod row order" in guide
+        assert "Reuse (S1)" not in guide
 
 
 def test_wardrobe_and_place_wording():

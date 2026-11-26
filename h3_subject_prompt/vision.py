@@ -54,7 +54,7 @@ Do not cite <Picture N> or <Video N> in the summary, the opening, or the shots. 
 Once a person is established, she, he, her, and him are fine.
 Later shots start again with the same <Subject N>. Do not restate who they are.
 A stacked RefMod is face, hair, and build only. It is not a motion to copy.
-When a locked line gives a voice-timbre reference, the first vocalization must cite that audio tag: <Subject N> (S1), using the voice timbre referenced from <Audio N>, says <d>[English] exact words</d>. Never write <Subject N> <Audio N> or <Subject N> (<Audio N>). Reuse (S1) and the Audio tag after that. Spoken words go only inside the <d> tag. A moan or breath is not dialogue and stays outside it.
+Assign speaker IDs to vocalizing subjects by the order of their first vocal event in the target video: the first distinct speaker is (S1), the next new speaker is (S2), and so on, including subjects without voice references. For example, if <Subject 2> speaks first and <Subject 1> replies, they are (S1) and (S2), respectively. Do not derive IDs from Subject numbers, Audio numbers, or RefMod row order. Reuse each speaker's ID for later vocalizations and shots. A subject who never vocalizes gets no speaker ID. If a subject has a paired voice-timbre reference, cite that subject's matching Audio tag on their first vocalization. Write a referenced first vocalization as <Subject N> (Sx), using the voice timbre referenced from <Audio N>, says <d>[English] exact words</d>; without a paired reference, use <Subject N> (Sx) says <d>[English] exact words</d>. Never write <Subject N> <Audio N> or <Subject N> (<Audio N>). Spoken words go only inside the <d> tag. A moan or breath is not dialogue and stays outside it.
 Write a repeated action as one continuous steady rhythm.
 overall_soundscape is the diegetic bed only: room tone plus fabric, breath, or contact that fits the action. No subject names. No score.
 Do not write subject definitions, retention, or music."""
@@ -71,8 +71,10 @@ Start [Shot 1] with no timestamp. A later shot is [Shot N] At MM:SS.mmm."""
 _GEMMA_NOTE = (
     "Write each <Subject N> once in a shot, then use she or he. "
     "Do not cite <Video N> or <Picture N> in the shot. "
-    "A voice is <Subject N> (S1), using the voice timbre referenced from <Audio N> — "
-    "never <Subject N> <Audio N> or <Subject N> (<Audio N>). "
+    "Assign S IDs to vocalizing subjects by first vocal-event order, including those without voice references; "
+    "do not use Subject, Audio, or RefMod row order. Reuse each ID across later vocalizations. "
+    "For a paired voice reference, cite its matching Audio N on the subject's first vocalization. "
+    "Never write <Subject N> <Audio N> or <Subject N> (<Audio N>). "
     "Spoken words go in <d>[English] words</d>, not in quotes. "
     "On the first appearance of a person, write <Subject N> then the action — no who-line looks. "
     "A place is the room. A clothing set is the outfit a person wears."
@@ -464,9 +466,13 @@ def draft_request(data, length=124):
         )
     if any(item.get("voice") or item["kind"] == "audio" for item in assign_fn(data.get("mods") or [])):
         parts.append(
-            "When a locked line gives a subject a voice-timbre reference, the first vocalization must be "
-            "<Subject N> (S1), using the voice timbre referenced from <Audio N>, says <d>[English] exact words</d>. "
-            "Never write <Subject N> <Audio N> or <Subject N> (<Audio N>). Cite the Audio tag in that timbre phrase."
+            "Assign S IDs to vocalizing subjects by first vocal-event order in the target video, including subjects "
+            "without voice references: first distinct speaker is (S1), next new speaker is (S2), and so on. "
+            "Do not use Subject, Audio, or RefMod row order; reuse each ID for later vocalizations. "
+            "For example, if <Subject 2> speaks first and <Subject 1> replies, they are (S1) and (S2). "
+            "A subject who never vocalizes gets no speaker ID. If a subject has a paired voice reference, "
+            "cite its matching Audio tag on that subject's first vocalization. "
+            "Never write <Subject N> <Audio N> or <Subject N> (<Audio N>)."
         )
     return "\n".join(parts), pictures
 

@@ -182,7 +182,7 @@ def migrate_state(data):
 
 def assign(mods):
     """Enabled RefMod rows, top to bottom, with Subject / Video / Audio numbers."""
-    subject = video = audio = speaker = 0
+    subject = video = audio = 0
     assigned = []
     for index, row in enumerate(mods or []):
         if not isinstance(row, dict) or row.get("enabled") is False:
@@ -210,9 +210,7 @@ def assign(mods):
         item["refmod"] = visual_name
         if voice_name:
             audio += 1
-            speaker += 1
             item["voice"] = audio
-            item["speaker"] = speaker
             item["voice_refmod"] = voice_name
         assigned.append(item)
     return assigned
@@ -377,7 +375,7 @@ def definition_lines(item):
     if item.get("voice"):
         lines.append(
             f"<Audio {item['voice']}> is the voice-timbre reference for "
-            f"<Subject {sn}> (S{item['speaker']})."
+            f"<Subject {sn}>."
         )
     return lines
 

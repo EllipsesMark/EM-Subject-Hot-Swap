@@ -179,7 +179,7 @@ def assign(mods):
     ``wears`` only controls order (outfit sits under the character) and the
     ``wearing <Subject N>`` cross-link — it does not merge Subjects.
     """
-    subject = picture = video = audio = speaker = 0
+    subject = picture = video = audio = 0
     assigned = []
     subject_by_row_id = {}
     pending_tied = []
@@ -244,9 +244,7 @@ def assign(mods):
 
         if voice_name:
             audio += 1
-            speaker += 1
             item["voice"] = audio
-            item["speaker"] = speaker
             item["voice_refmod"] = voice_name
         assigned.append(item)
 
@@ -455,7 +453,7 @@ def definition_lines(item, outfits=None):
     if item.get("voice"):
         lines.append(
             f"<Audio {item['voice']}> is the voice-timbre reference for "
-            f"<Subject {sn}> (S{item['speaker']})."
+            f"<Subject {sn}>."
         )
     return lines
 
