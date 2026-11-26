@@ -42,6 +42,8 @@ class H3SubjectPromptHybrid:
                 "vae": ("VAE", {"tooltip":
                     "MiniMax H3 video VAE. Required to encode still Picture rows "
                     "into DiT refs. Also warms on-pick RefMod preview baking."}),
+                "audio_vae": ("VAE", {"tooltip":
+                    "MiniMax H3 audio VAE. Required when a raw audio clip is paired with a visual row."}),
                 "llm": ("H3_LLM", {"tooltip":
                     "LLM (GGUF) - Loader for Describe / Draft; supports GGUF or HTTP."}),
                 "instructions": ("H3_DRAFT_INSTRUCTIONS",),
@@ -49,7 +51,7 @@ class H3SubjectPromptHybrid:
         }
 
     def build(self, clip, width, height, length, ref_image_size, state,
-              vae=None, llm=None, instructions=None):
+              vae=None, audio_vae=None, llm=None, instructions=None):
         del llm, instructions
         try:
             data = json.loads(state or "{}")
@@ -73,11 +75,43 @@ class H3SubjectPromptHybrid:
         from .hybrid_stills import load_still
         from .refmods import audio_block_for, load_visual, push_visual_refs
 
+        def voice_audio_block(item):
+            if item.get("voice_audio_file"):
+                if audio_vae is None:
+                    raise ValueError(
+                        "Raw audio clips paired with Mix visuals need the MiniMax H3 audio VAE "
+                        "connected to the audio_vae input."
+                    )
+                from comfy_extras.nodes_minimax_h3 import _encode_ref_audio
+                from ..h3_ref2va.ref_node import load_audio
+                from .htc_refmod import audio_block
+                audio = load_audio(
+                    item["voice_audio_file"],
+                    item.get("voice_audio_start", 0),
+                    item.get("voice_audio_end", 0),
+                )
+                try:
+                    latent, _ref_t = _encode_ref_audio(audio_vae, audio)
+                except Exception as exc:
+                    raise ValueError(
+                        f"Failed to encode raw audio clip {item['voice_audio_file']}: {exc}"
+                    ) from exc
+                block = audio_block({"audio_latent": latent}, 1.0)
+                if not block:
+                    raise ValueError(f"Could not encode raw audio clip: {item['voice_audio_file']}")
+                return block
+            return audio_block_for(item["voice_refmod"], 1.0)
+
         if vae is not None:
             set_preview_vae(vae)
 
         data = migrate_state(data)
         assigned = assign(data.get("mods") or [])
+        if audio_vae is None and any(item.get("voice_audio_file") for item in assigned):
+            raise ValueError(
+                "Raw audio clips paired with Mix visuals need the MiniMax H3 audio VAE "
+                "connected to the audio_vae input."
+            )
         latent, _frame_count = _empty_av_latent(width, height, length)
 
         ref_items = []
@@ -116,7 +150,7 @@ class H3SubjectPromptHybrid:
                 })
                 if item.get("voice"):
                     ref_items.append({"type": "audio"})
-                    ref_blocks.append(audio_block_for(item["voice_refmod"], 1.0))
+                    ref_blocks.append(voice_audio_block(item))
                 continue
 
             # RefMod visual — every member in the bundle
@@ -134,7 +168,7 @@ class H3SubjectPromptHybrid:
                 notes.append(f"{item['refmod']}: {n_mem} visual members applied.")
             if item.get("voice"):
                 ref_items.append({"type": "audio"})
-                ref_blocks.append(audio_block_for(item["voice_refmod"], 1.0))
+                ref_blocks.append(voice_audio_block(item))
 
         tokens = clip.tokenize(info["prompt"], minimax_ref_items=ref_items)
         cond = clip.encode_from_tokens_scheduled(tokens)

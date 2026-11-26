@@ -322,6 +322,52 @@ def test_hybrid_refmod_and_image_numbering():
     assert "Subject 2" in prompt
 
 
+def test_hybrid_visual_can_pair_trimmed_raw_audio():
+    from h3_subject_prompt.hybrid_assemble import assign, build_prompt
+    row = {
+        "enabled": True,
+        "source": "refmod",
+        "refmod": "hero_visual",
+        "voice_mode": "audio",
+        "voice_audio_file": "voices/line.wav",
+        "voice_audio_start": 1.25,
+        "voice_audio_end": 3.75,
+        "concept": "identity",
+        "strength": 1.0,
+        "who": "a woman",
+        "keep": "face and hair",
+    }
+    assigned = assign([row])
+    assert assigned[0]["kind"] == "refmod"
+    assert assigned[0]["voice_audio_file"] == "voices/line.wav"
+    assert assigned[0]["voice_audio_start"] == 1.25
+    assert assigned[0]["voice_audio_end"] == 3.75
+    result = build_prompt({"mods": [row]})
+    audio_map = result["map"][1]
+    assert audio_map["wire"] == "voice_audio"
+    assert audio_map["file"] == "voices/line.wav"
+    assert audio_map["start"] == 1.25 and audio_map["end"] == 3.75
+
+
+def test_hybrid_legacy_voice_refmod_pairing_stays_compatible():
+    from h3_subject_prompt.hybrid_assemble import assign, build_prompt
+    row = {
+        "enabled": True,
+        "source": "refmod",
+        "refmod": "hero_visual",
+        "voice_refmod": "hero_voice",
+        "concept": "identity",
+        "strength": 1.0,
+    }
+    assigned = assign([row])
+    assert assigned[0]["voice_refmod"] == "hero_voice"
+    assert "speaker" not in assigned[0]
+    prompt = build_prompt({"mods": [row]})["prompt"]
+    assert "<Audio 1> is the voice-timbre reference for <Subject 1>." in prompt
+    assert "<Subject 1> (S1)" not in prompt
+    assert build_prompt({"mods": [row]})["map"][1]["wire"] == "voice_refmod"
+
+
 def test_hybrid_tied_wardrobe_is_subject_two():
     from h3_subject_prompt.hybrid_assemble import assign, build_prompt
     mods = [

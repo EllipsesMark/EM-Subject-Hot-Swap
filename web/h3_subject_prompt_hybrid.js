@@ -116,6 +116,10 @@ const CSS = `
   padding:0; line-height:16px; font-size:12px; background:#3d1e1e; border-color:#a33; color:#f0a0a0; }
 .h3h-create-audio-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
 .h3h-create-audio-name { color:#aaa; font:11px sans-serif; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
+.h3h-create-wavebox { background:#1d1d1d; border:1px solid #444; border-radius:4px; padding:6px; display:flex; flex-direction:column; gap:4px; }
+.h3h-create-wave { width:100%; height:64px; display:block; cursor:ew-resize; touch-action:none; }
+.h3h-create-times { display:flex; align-items:center; justify-content:space-between; gap:6px; font:10px sans-serif; color:#888; }
+.h3h-create-times .sel { color:#46b4e6; }
 .h3h-create-path-block { display:none; flex-direction:column; gap:4px; }
 .h3h-create-path-block.open { display:flex; }
 .h3h-looks { position:fixed; z-index:10060; inset:0; background:rgba(0,0,0,.78);
@@ -344,6 +348,10 @@ function newMod(source) {
     source: source || "refmod",
     refmod: "",
     voice_refmod: "",
+    voice_mode: "none",
+    voice_audio_file: "",
+    voice_audio_start: 0,
+    voice_audio_end: 0,
     image: "",
     concept: source === "image" ? "wardrobe" : "identity",
     strength: 1.0,
@@ -368,12 +376,22 @@ function normalizeMod(row) {
   if (!row || typeof row !== "object") return base;
   const concept = conceptOf(row);
   const source = sourceOf(row);
+  const voiceRefmod = String(row.voice_refmod || "").trim();
+  const voiceAudioFile = String(row.voice_audio_file || "").trim();
+  const requestedVoiceMode = String(row.voice_mode || "").trim().toLowerCase();
+  const voiceMode = ["none", "refmod", "audio"].includes(requestedVoiceMode)
+    ? requestedVoiceMode
+    : voiceAudioFile && !voiceRefmod ? "audio" : voiceRefmod ? "refmod" : "none";
   return Object.assign(base, {
     id: row.id || base.id,
     enabled: row.enabled !== false,
     source,
     refmod: String(row.refmod || "").trim(),
-    voice_refmod: String(row.voice_refmod || "").trim(),
+    voice_refmod: voiceRefmod,
+    voice_mode: voiceMode,
+    voice_audio_file: voiceAudioFile,
+    voice_audio_start: Math.max(0, Number(row.voice_audio_start) || 0),
+    voice_audio_end: Math.max(0, Number(row.voice_audio_end) || 0),
     image: String(row.image || "").trim(),
     concept,
     strength: clampStrength(row.strength),
@@ -537,6 +555,10 @@ function setup(node, opts = null) {
   let catalogCache = null;
   let voiceCache = null;
   let imageCache = null;
+  let audioCache = null;
+  let mixAudioPeaks = new Map();
+  let mixAudioPlayer = null;
+  let mixAudioPlayButton = null;
   let visionBusy = false;
   let visionKind = "";
   let describingId = null;
@@ -873,9 +895,15 @@ function setup(node, opts = null) {
         subject += 1; video += 1;
         bits.push(`Video ${video} / Subject ${subject} → ${row.refmod} @ ${clampStrength(row.strength).toFixed(2)}`);
       }
-      if (row.voice_refmod) {
+      const voiceMode = row.voice_mode || (row.voice_refmod ? "refmod" : row.voice_audio_file ? "audio" : "none");
+      if (voiceMode === "refmod" && row.voice_refmod) {
         audio += 1;
         bits.push(`Audio ${audio} → ${row.voice_refmod}`);
+      } else if (voiceMode === "audio" && row.voice_audio_file) {
+        audio += 1;
+        const range = Number(row.voice_audio_end) > Number(row.voice_audio_start)
+          ? ` [${Number(row.voice_audio_start).toFixed(2)}–${Number(row.voice_audio_end).toFixed(2)}s]` : "";
+        bits.push(`Audio ${audio} → ${row.voice_audio_file}${range}`);
       }
     }
     mapLine.textContent = bits.join("\n") || "No refs are switched on.";
@@ -1399,14 +1427,14 @@ function setup(node, opts = null) {
   }
 
   function openPicker(anchor, mode, current, onPick) {
-    // mode: refmod | voice | image
+    // mode: refmod | voice | image | audio
     document.querySelectorAll(".h3h-picker, .h3h-pick-blanket").forEach((node) => node.remove());
     const blanket = el("div", "h3h-pick-blanket");
     const popup = el("div", "h3h-picker");
     stop(popup);
     const searchWrap = el("div", "h3h-pick-search");
     const search = document.createElement("input");
-    search.placeholder = mode === "image" ? "Filter images…" : mode === "voice" ? "Filter voice RefMods…" : "Filter RefMods…";
+    search.placeholder = mode === "image" ? "Filter images…" : mode === "audio" ? "Filter audio clips…" : mode === "voice" ? "Filter voice RefMods…" : "Filter RefMods…";
     const sortSel = document.createElement("select");
     sortSel.className = "h3h-pick-sort";
     const sortOpts = [
@@ -1415,14 +1443,14 @@ function setup(node, opts = null) {
       ["name_az", "Name A–Z"],
       ["name_za", "Name Z–A"],
     ];
-    if (mode !== "image") sortOpts.push(["concept", "Concept"]);
+    if (mode !== "image" && mode !== "audio") sortOpts.push(["concept", "Concept"]);
     for (const [value, label] of sortOpts) {
       const o = document.createElement("option");
       o.value = value;
       o.textContent = label;
       sortSel.appendChild(o);
     }
-    const sortKey = mode === "image" ? "h3h_image_sort" : "h3h_refmod_sort";
+    const sortKey = mode === "image" ? "h3h_image_sort" : mode === "audio" ? "h3h_audio_sort" : "h3h_refmod_sort";
     const savedSort = String(node.properties?.[sortKey] || "newest");
     sortSel.value = [...sortSel.options].some((o) => o.value === savedSort) ? savedSort : "newest";
     stop(sortSel);
@@ -1452,6 +1480,40 @@ function setup(node, opts = null) {
       document.addEventListener("mousedown", onDoc, true);
       document.addEventListener("keydown", onKey, true);
     }, 0);
+    if (mode === "audio") {
+      const uploadAudio = el("button", "h3h-btn", "Upload audio");
+      const audioInput = document.createElement("input");
+      audioInput.type = "file";
+      audioInput.accept = "audio/*,.wav,.mp3,.flac,.ogg,.m4a,.aac,.opus";
+      audioInput.style.display = "none";
+      stop(uploadAudio); stop(audioInput);
+      uploadAudio.addEventListener("click", () => audioInput.click());
+      audioInput.addEventListener("change", async () => {
+        const picked = audioInput.files?.[0];
+        audioInput.value = "";
+        if (!picked) return;
+        uploadAudio.disabled = true;
+        const form = new FormData();
+        form.append("image", picked);
+        form.append("overwrite", "true");
+        form.append("type", "input");
+        try {
+          const response = await api.fetchApi("/upload/image", { method: "POST", body: form });
+          const payload = await response.json();
+          if (!response.ok || !payload.name) throw new Error(payload.error || "Upload failed");
+          const path = payload.subfolder ? `${payload.subfolder}/${payload.name}` : payload.name;
+          onPick({ name: path, path });
+          audioCache = null;
+          dismiss();
+          renderList();
+          commit();
+        } catch (error) {
+          window.alert(error.message || "Couldn't upload that audio.");
+          uploadAudio.disabled = false;
+        }
+      });
+      searchWrap.append(uploadAudio, audioInput);
+    }
     searchWrap.append(search, sortSel, close);
     const split = el("div", "h3h-pick-split");
     const folders = el("div", "h3h-pick-folders");
@@ -1460,7 +1522,7 @@ function setup(node, opts = null) {
     const newFolderBtn = el("button", "h3h-btn", "+ Folder");
     stop(newFolderBtn);
     newFolderBtn.title = "Create a subfolder under models/refmods/";
-    newFolderBtn.style.display = mode === "image" ? "none" : "";
+    newFolderBtn.style.display = mode === "image" || mode === "audio" ? "none" : "";
     folderActs.appendChild(newFolderBtn);
     folders.append(folderList, folderActs);
     const pane = el("div", "h3h-pick-pane");
@@ -1471,7 +1533,8 @@ function setup(node, opts = null) {
     foot.style.gap = "8px";
     const footText = el("span", null, mode === "image"
       ? "Still → Picture tag. Wardrobe plates work well here."
-      : "RefMod → Video tag. Search by name if needed.");
+      : mode === "audio" ? "Audio clip → voice reference. Trim its range in the Mix row."
+        : "RefMod → Video tag. Search by name if needed.");
     footText.style.flex = "1";
     const refreshBtn = el("button", "h3h-btn", "Refresh");
     stop(refreshBtn);
@@ -1545,7 +1608,7 @@ function setup(node, opts = null) {
         return;
       }
       for (const item of shown) {
-        const name = item.name || item.path;
+        const name = (mode === "image" || mode === "audio") ? (item.path || item.name) : (item.name || item.path);
         const card = el("div", "h3h-pick-card" + (current === name ? " on" : ""));
         if (mode === "image") {
           const img = document.createElement("img");
@@ -1553,6 +1616,15 @@ function setup(node, opts = null) {
           img.src = imageView(item.path);
           img.addEventListener("error", () => img.remove());
           card.appendChild(img);
+        } else if (mode === "audio") {
+          const player = document.createElement("audio");
+          player.controls = true;
+          player.preload = "none";
+          player.src = imageView(name);
+          player.style.width = "100%";
+          player.addEventListener("click", (event) => event.stopPropagation());
+          player.addEventListener("pointerdown", (event) => event.stopPropagation());
+          card.appendChild(player);
         } else if (item.has_looks || item.has_preview) {
           const img = document.createElement("img");
           img.alt = "";
@@ -1670,9 +1742,11 @@ function setup(node, opts = null) {
     });
     const url = mode === "image"
       ? "/h3subjecthybrid/images"
-      : mode === "voice"
-        ? "/h3subjectrefmod/voices"
-        : "/h3subjectrefmod/refmods";
+      : mode === "audio"
+        ? "/h3subjectref/audio"
+        : mode === "voice"
+          ? "/h3subjectrefmod/voices"
+          : "/h3subjectrefmod/refmods";
 
     function applyBody(body) {
       if (mode === "image") {
@@ -1680,6 +1754,14 @@ function setup(node, opts = null) {
         items = (imageCache.files || []).map((f) => ({
           name: f.path,
           path: f.path,
+          description: "",
+          mtime: f.mtime || 0,
+        }));
+      } else if (mode === "audio") {
+        audioCache = body || { files: [] };
+        items = (audioCache.files || []).map((f) => ({
+          name: f.name || f.path,
+          path: f.path || f.name,
           description: "",
           mtime: f.mtime || 0,
         }));
@@ -1697,19 +1779,21 @@ function setup(node, opts = null) {
     }
 
     function loadList({ force = false } = {}) {
-      const cached = mode === "image" ? imageCache : mode === "voice" ? voiceCache : catalogCache;
+      const cached = mode === "image" ? imageCache : mode === "audio" ? audioCache : mode === "voice" ? voiceCache : catalogCache;
       if (cached && !force) applyBody(cached);
       footText.textContent = cached && !force
         ? "Refreshing list…"
         : (mode === "image"
           ? "Still → Picture tag. Wardrobe plates work well here."
-          : "RefMod → Video tag. Search by name if needed.");
+          : mode === "audio" ? "Audio clip → voice reference. Trim its range in the Mix row."
+            : "RefMod → Video tag. Search by name if needed.");
       refreshBtn.disabled = true;
       return api.fetchApi(url).then((r) => r.json()).then((body) => {
         applyBody(body);
         footText.textContent = mode === "image"
           ? "Still → Picture tag. Wardrobe plates work well here."
-          : "RefMod → Video tag. Search by name if needed.";
+          : mode === "audio" ? "Audio clip → voice reference. Trim its range in the Mix row."
+            : "RefMod → Video tag. Search by name if needed.";
       }).catch((e) => {
         if (!items.length) pane.appendChild(el("div", "h3h-pick-empty", e.message || "Could not list."));
         footText.textContent = e.message || "Could not refresh list.";
@@ -1719,7 +1803,7 @@ function setup(node, opts = null) {
     }
 
     async function loadFolders() {
-      if (mode === "image") {
+      if (mode === "image" || mode === "audio") {
         diskFolders = [];
         render();
         return;
@@ -1772,6 +1856,201 @@ function setup(node, opts = null) {
     }
     state.mods.forEach((row, index) => list.appendChild(renderRow(row, index)));
     updateMap();
+  }
+
+  async function loadMixAudioWave(file) {
+    if (mixAudioPeaks.has(file)) return mixAudioPeaks.get(file);
+    const promise = (async () => {
+      const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextCtor) throw new Error("Web Audio is unavailable");
+      const response = await api.fetchApi(imageView(file));
+      if (!response.ok) throw new Error("Could not load audio preview");
+      const bytes = await response.arrayBuffer();
+      const context = new AudioContextCtor();
+      try {
+        const buffer = await context.decodeAudioData(bytes.slice(0));
+        const count = 180;
+        const perBucket = Math.max(1, Math.floor(buffer.length / count));
+        const peaks = new Array(count).fill(0);
+        for (let i = 0; i < count; i += 1) {
+          const from = i * perBucket;
+          const to = Math.min(buffer.length, from + perBucket);
+          let peak = 0;
+          for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+            const samples = buffer.getChannelData(channel);
+            for (let j = from; j < to; j += 1) peak = Math.max(peak, Math.abs(samples[j]));
+          }
+          peaks[i] = peak;
+        }
+        return { duration: buffer.duration, peaks };
+      } finally {
+        await context.close();
+      }
+    })();
+    mixAudioPeaks.set(file, promise);
+    try {
+      const info = await promise;
+      mixAudioPeaks.set(file, info);
+      return info;
+    } catch (error) {
+      mixAudioPeaks.delete(file);
+      throw error;
+    }
+  }
+
+  function mixAudioWindow(row, duration) {
+    const start = Math.max(0, Math.min(duration, Number(row.voice_audio_start) || 0));
+    let end = Number(row.voice_audio_end) > 0 ? Math.min(duration, Number(row.voice_audio_end)) : duration;
+    if (end <= start) end = duration;
+    return { start, end };
+  }
+
+  function mixAudioWave(row) {
+    const box = el("div", "h3h-create-wavebox");
+    const canvas = document.createElement("canvas");
+    canvas.className = "h3h-create-wave";
+    canvas.title = "Drag either edge to trim, or drag the selection to move it.";
+    const times = el("div", "h3h-create-times");
+    const startLabel = el("span");
+    const selectedLabel = el("span", "sel");
+    const play = el("button", "h3h-btn", "Play");
+    const endLabel = el("span");
+    stop(canvas); stop(play);
+    times.append(startLabel, selectedLabel, play, endLabel);
+    box.append(canvas, times);
+
+    let info = null;
+    let localPlayer = null;
+    let raf = 0;
+    const fmt = (value) => {
+      const seconds = Math.max(0, Number(value) || 0);
+      return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}.${Math.floor((seconds % 1) * 10)}`;
+    };
+    const paint = () => {
+      const rect = canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.round(rect.width * dpr);
+      canvas.height = Math.round(rect.height * dpr);
+      const ctx = canvas.getContext("2d");
+      ctx.scale(dpr, dpr);
+      const width = rect.width;
+      const height = rect.height;
+      const duration = info?.duration || 1;
+      const win = mixAudioWindow(row, duration);
+      const x0 = (win.start / duration) * width;
+      const x1 = (win.end / duration) * width;
+      ctx.fillStyle = "#101010";
+      ctx.fillRect(0, 0, width, height);
+      if (info?.peaks) {
+        const mid = height / 2;
+        const step = width / info.peaks.length;
+        info.peaks.forEach((peak, index) => {
+          const x = index * step;
+          const selected = x >= x0 && x <= x1;
+          const h = Math.max(2, peak * (height * 0.86));
+          ctx.fillStyle = selected ? "#46b4e6" : "#555";
+          ctx.fillRect(x, mid - h / 2, Math.max(1, step * 0.65), h);
+        });
+      }
+      ctx.fillStyle = "rgba(0,0,0,.45)";
+      ctx.fillRect(0, 0, x0, height);
+      ctx.fillRect(x1, 0, Math.max(0, width - x1), height);
+      ctx.strokeStyle = "#d5f2ff";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(x0, 0); ctx.lineTo(x0, height); ctx.moveTo(x1, 0); ctx.lineTo(x1, height); ctx.stroke();
+      if (localPlayer?.duration && mixAudioPlayer === localPlayer) {
+        const x = (localPlayer.currentTime / localPlayer.duration) * width;
+        ctx.strokeStyle = "#fff"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke();
+      }
+      startLabel.textContent = fmt(win.start);
+      selectedLabel.textContent = fmt(Math.max(0, win.end - win.start));
+      endLabel.textContent = fmt(info ? win.end : 0);
+    };
+    loadMixAudioWave(row.voice_audio_file).then((loaded) => {
+      if (!box.isConnected) return;
+      info = loaded;
+      paint();
+    }).catch((error) => {
+      if (box.isConnected) selectedLabel.textContent = error.message || "Audio preview unavailable";
+    });
+    paint();
+
+    play.addEventListener("click", () => {
+      if (mixAudioPlayer && !mixAudioPlayer.paused) {
+        mixAudioPlayer.pause();
+        mixAudioPlayer = null;
+        if (mixAudioPlayButton) mixAudioPlayButton.textContent = "Play";
+        mixAudioPlayButton = null;
+        cancelAnimationFrame(raf);
+        paint();
+        return;
+      }
+      if (!info) return;
+      if (mixAudioPlayer) mixAudioPlayer.pause();
+      if (mixAudioPlayButton) mixAudioPlayButton.textContent = "Play";
+      const player = new Audio(imageView(row.voice_audio_file));
+      localPlayer = player;
+      mixAudioPlayer = player;
+      mixAudioPlayButton = play;
+      const tick = () => {
+        if (mixAudioPlayer !== player) return;
+        const win = mixAudioWindow(row, player.duration || info.duration);
+        if (!box.isConnected || player.currentTime >= win.end - 0.03) {
+          player.pause(); mixAudioPlayer = null; mixAudioPlayButton = null; play.textContent = "Play"; paint(); return;
+        }
+        paint(); raf = requestAnimationFrame(tick);
+      };
+      player.addEventListener("loadedmetadata", () => {
+        const win = mixAudioWindow(row, player.duration || info.duration);
+        player.currentTime = win.start;
+        player.play().then(() => { play.textContent = "Stop"; raf = requestAnimationFrame(tick); }).catch(() => {});
+      }, { once: true });
+      player.addEventListener("ended", () => {
+        if (mixAudioPlayer === player) { mixAudioPlayer = null; mixAudioPlayButton = null; play.textContent = "Play"; }
+      }, { once: true });
+    });
+
+    canvas.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || !info) return;
+      event.preventDefault();
+      const bounds = canvas.getBoundingClientRect();
+      const duration = info.duration;
+      const xOf = (clientX) => Math.max(0, Math.min(duration, ((clientX - bounds.left) / bounds.width) * duration));
+      let win = mixAudioWindow(row, duration);
+      const x = xOf(event.clientX);
+      const edge = duration * (8 / bounds.width);
+      const zone = Math.abs(x - win.start) <= edge ? "start"
+        : Math.abs(x - win.end) <= edge ? "end"
+          : x > win.start && x < win.end ? "move" : "jump";
+      const origin = x, originStart = win.start, originEnd = win.end;
+      const move = (ev) => {
+        const at = xOf(ev.clientX);
+        if (zone === "start") win.start = Math.min(at, win.end - 0.1);
+        else if (zone === "end") win.end = Math.max(at, win.start + 0.1);
+        else if (zone === "move") {
+          const span = originEnd - originStart;
+          win.start = Math.max(0, Math.min(duration - span, originStart + at - origin));
+          win.end = win.start + span;
+        } else {
+          const span = Math.max(0.1, originEnd - originStart);
+          win.start = Math.max(0, Math.min(duration - span, at - span / 2));
+          win.end = win.start + span;
+        }
+        row.voice_audio_start = Math.round(win.start * 100) / 100;
+        row.voice_audio_end = Math.round(win.end * 100) / 100;
+        paint();
+      };
+      const up = () => {
+        document.removeEventListener("pointermove", move);
+        document.removeEventListener("pointerup", up);
+        commit();
+      };
+      document.addEventListener("pointermove", move);
+      document.addEventListener("pointerup", up);
+    });
+    return box;
   }
 
   function renderRow(row, index) {
@@ -2148,23 +2427,77 @@ function setup(node, opts = null) {
       keepLine.append(keep, marker);
       view.appendChild(keepLine);
 
-      if (source === "refmod" && concept !== "voice") {
+      if (concept !== "voice") {
+        const voiceMode = row.voice_mode || (row.voice_refmod ? "refmod" : row.voice_audio_file ? "audio" : "none");
         const voiceLine = el("div", "h3h-line");
-        voiceLine.appendChild(el("span", "h3h-mini", "voice"));
-        const voiceBtn = el("button", "h3h-btn h3h-file", row.voice_refmod || "Optional voice…");
-        stop(voiceBtn);
-        voiceBtn.addEventListener("click", () => {
-          openPicker(voiceBtn, "voice", row.voice_refmod, (item) => { row.voice_refmod = item.name; });
-        });
-        const clearVoice = el("button", "h3h-btn", "Clear");
-        stop(clearVoice);
-        clearVoice.addEventListener("click", () => {
+        voiceLine.appendChild(el("span", "h3h-mini", "voice source"));
+        const voiceModeSel = document.createElement("select");
+        for (const [value, label] of [["none", "None"], ["refmod", "Voice RefMod"], ["audio", "Audio clip"]]) {
+          const option = el("option", null, label);
+          option.value = value;
+          voiceModeSel.appendChild(option);
+        }
+        voiceModeSel.value = voiceMode;
+        stop(voiceModeSel);
+        voiceModeSel.addEventListener("change", () => {
+          row.voice_mode = voiceModeSel.value;
           row.voice_refmod = "";
+          row.voice_audio_file = "";
+          row.voice_audio_start = 0;
+          row.voice_audio_end = 0;
           renderList();
           commit();
         });
-        voiceLine.append(voiceBtn, clearVoice);
-        view.appendChild(voiceLine);
+        voiceLine.appendChild(voiceModeSel);
+        if (voiceMode === "refmod") {
+          const voiceBtn = el("button", "h3h-btn h3h-file", row.voice_refmod || "Choose voice RefMod…");
+          stop(voiceBtn);
+          voiceBtn.addEventListener("click", () => {
+            openPicker(voiceBtn, "voice", row.voice_refmod, (item) => {
+              row.voice_refmod = item.name;
+              row.voice_mode = "refmod";
+              row.voice_audio_file = "";
+            });
+          });
+          const clearVoice = el("button", "h3h-btn", "Clear");
+          stop(clearVoice);
+          clearVoice.addEventListener("click", () => {
+            row.voice_refmod = "";
+            row.voice_mode = "none";
+            renderList();
+            commit();
+          });
+          voiceLine.append(voiceBtn, clearVoice);
+        } else if (voiceMode === "audio") {
+          const audioLine = el("div", "h3h-line");
+          const audioBtn = el("button", "h3h-btn h3h-file", row.voice_audio_file || "Choose audio clip…");
+          stop(audioBtn);
+          audioBtn.addEventListener("click", () => {
+            openPicker(audioBtn, "audio", row.voice_audio_file, (item) => {
+              row.voice_audio_file = item.path || item.name;
+              row.voice_audio_start = 0;
+              row.voice_audio_end = 0;
+              row.voice_mode = "audio";
+            });
+          });
+          const clearAudio = el("button", "h3h-btn", "Clear");
+          stop(clearAudio);
+          clearAudio.addEventListener("click", () => {
+            row.voice_audio_file = "";
+            row.voice_audio_start = 0;
+            row.voice_audio_end = 0;
+            row.voice_mode = "none";
+            renderList();
+            commit();
+          });
+          audioLine.append(audioBtn, clearAudio);
+          view.appendChild(voiceLine);
+          view.appendChild(audioLine);
+          if (row.voice_audio_file) view.appendChild(mixAudioWave(row));
+        } else {
+          voiceLine.appendChild(el("span", "h3h-mini", "No voice reference attached."));
+        }
+        if (voiceMode !== "audio") view.appendChild(voiceLine);
       }
       const note = visionNote.get(row.id);
       if (note) view.appendChild(el("div", "h3h-note", note));

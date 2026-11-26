@@ -201,6 +201,10 @@ def assign(mods):
             "wears_subject": 0,
         }
         voice_name = str(row.get("voice_refmod") or "").strip()
+        voice_audio_file = str(row.get("voice_audio_file") or "").strip()
+        voice_mode = str(row.get("voice_mode") or "").strip().lower()
+        if voice_mode not in ("none", "refmod", "audio"):
+            voice_mode = "audio" if voice_audio_file and not voice_name else "refmod" if voice_name else "none"
         refmod_name = str(row.get("refmod") or "").strip()
         image_name = str(row.get("image") or "").strip()
 
@@ -242,10 +246,16 @@ def assign(mods):
         if rid:
             subject_by_row_id[rid] = subject
 
-        if voice_name:
+        if voice_mode == "refmod" and voice_name:
             audio += 1
             item["voice"] = audio
             item["voice_refmod"] = voice_name
+        elif voice_mode == "audio" and voice_audio_file:
+            audio += 1
+            item["voice"] = audio
+            item["voice_audio_file"] = voice_audio_file
+            item["voice_audio_start"] = row.get("voice_audio_start", 0)
+            item["voice_audio_end"] = row.get("voice_audio_end", 0)
         assigned.append(item)
 
     for item in pending_tied:
@@ -265,6 +275,21 @@ def assign(mods):
         rid = _row_id(row)
         if rid:
             subject_by_row_id[rid] = subject
+        voice_name = str(row.get("voice_refmod") or "").strip()
+        voice_audio_file = str(row.get("voice_audio_file") or "").strip()
+        voice_mode = str(row.get("voice_mode") or "").strip().lower()
+        if voice_mode not in ("none", "refmod", "audio"):
+            voice_mode = "audio" if voice_audio_file and not voice_name else "refmod" if voice_name else "none"
+        if voice_mode == "refmod" and voice_name:
+            audio += 1
+            item["voice"] = audio
+            item["voice_refmod"] = voice_name
+        elif voice_mode == "audio" and voice_audio_file:
+            audio += 1
+            item["voice"] = audio
+            item["voice_audio_file"] = voice_audio_file
+            item["voice_audio_start"] = row.get("voice_audio_start", 0)
+            item["voice_audio_end"] = row.get("voice_audio_end", 0)
         if parent_subject:
             insert_at = len(assigned)
             for i, other in enumerate(assigned):
@@ -542,13 +567,21 @@ def _map_rows(assigned):
                 "refmod": item.get("refmod") or "",
             })
         if item.get("voice"):
-            rows.append({
+            audio_row = {
                 "label": f"Audio {item['voice']}",
-                "wire": "voice_refmod",
+                "wire": "voice_audio" if item.get("voice_audio_file") else "voice_refmod",
                 "name": name + " voice",
                 "subject": item.get("subject"),
-                "refmod": item.get("voice_refmod") or "",
-            })
+            }
+            if item.get("voice_audio_file"):
+                audio_row.update({
+                    "file": item["voice_audio_file"],
+                    "start": item.get("voice_audio_start", 0),
+                    "end": item.get("voice_audio_end", 0),
+                })
+            else:
+                audio_row["refmod"] = item.get("voice_refmod") or ""
+            rows.append(audio_row)
     return rows
 
 
