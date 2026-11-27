@@ -1820,6 +1820,7 @@ function setup(node, opts = null) {
       n_ctx: Number(widget("n_ctx")?.value) || 16384,
       n_gpu_layers: gpu ? Number(gpu.value) : -1,
       keep_loaded: !!widget("keep_loaded")?.value,
+      diagnostics: !!widget("diagnostics")?.value,
       base_url: widget("base_url")?.value || "http://localhost:1234/v1",
       model: widget("model")?.value || "local",
       api_key: widget("api_key")?.value || "none",
@@ -1844,15 +1845,28 @@ function setup(node, opts = null) {
   async function askVision(payload) {
     const loader = loaderSettings();
     if (!loader) throw new Error("Connect LLM (GGUF) - Loader to the llm input.");
-    const response = await api.fetchApi("/h3subjectref/vision", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(Object.assign({ loader, instructions: instructionSettings() }, payload)),
-    });
-    let body = {};
-    try { body = await response.json(); } catch (e) { body = {}; }
-    if (!response.ok || body.error) throw new Error(body.error || "The writer did not answer.");
-    return body;
+    const diagnosticId = loader.diagnostics
+      ? (globalThis.crypto?.randomUUID?.() || `hs-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`)
+      : "";
+    const request = Object.assign({ loader, instructions: instructionSettings() }, payload);
+    if (diagnosticId) request.diagnostic_id = diagnosticId;
+    try {
+      const response = await api.fetchApi("/h3subjectref/vision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+      let body = {};
+      try { body = await response.json(); } catch (e) { body = {}; }
+      if (!response.ok || body.error) throw new Error(body.error || "The writer did not answer.");
+      return body;
+    } catch (error) {
+      const message = error?.message || "The writer did not answer.";
+      if (diagnosticId && !message.includes(diagnosticId)) {
+        throw new Error(`${message} (Hot Swap diagnostic ID: ${diagnosticId})`);
+      }
+      throw error;
+    }
   }
 
   async function describeRow(row) {

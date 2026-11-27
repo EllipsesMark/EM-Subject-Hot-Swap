@@ -83,12 +83,16 @@ class H3PromptLLMLoader:
                     "default": "none", "password": True,
                     "tooltip": "HTTP only. Use 'none' for local servers. This value is saved in workflows.",
                 }),
+                "diagnostics": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Write opt-in Draft/Describe diagnostics to ComfyUI/user/hot_swap_diagnostics.log.",
+                }),
             },
         }
 
     def configure(
         self, backend, model_name, mmproj_name, n_ctx, n_gpu_layers,
-        keep_loaded, base_url, model, api_key,
+        keep_loaded, base_url, model, api_key, diagnostics,
     ):
         backend = str(backend or "GGUF").strip().lower()
         if backend == "http":
@@ -105,6 +109,7 @@ class H3PromptLLMLoader:
                 "mmproj_name": "none",
                 "model_path": None,
                 "mmproj_path": None,
+                "diagnostics": bool(diagnostics),
             },)
 
         if backend != "gguf":
@@ -145,6 +150,7 @@ class H3PromptLLMLoader:
             "n_ctx": int(n_ctx),
             "n_gpu_layers": int(n_gpu_layers),
             "keep_loaded": bool(keep_loaded),
+            "diagnostics": bool(diagnostics),
         },)
 
 

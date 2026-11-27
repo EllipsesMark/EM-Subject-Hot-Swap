@@ -926,6 +926,7 @@ function setup(node, opts = null) {
       n_ctx: Number(widget("n_ctx")?.value) || 16384,
       n_gpu_layers: gpu ? Number(gpu.value) : -1,
       keep_loaded: !!widget("keep_loaded")?.value,
+      diagnostics: !!widget("diagnostics")?.value,
       base_url: widget("base_url")?.value || "http://localhost:1234/v1",
       model: widget("model")?.value || "local",
       api_key: widget("api_key")?.value || "none",
@@ -978,6 +979,26 @@ function setup(node, opts = null) {
       return;
     }
     const info = frameInfo();
+    const diagnosticId = loader.diagnostics
+      ? (globalThis.crypto?.randomUUID?.() || `hs-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`)
+      : "";
+    const request = {
+      job: "draft",
+      loader,
+      instructions: instructionSettings(),
+      idea: state.idea,
+      style_mode: state.style_mode,
+      shot_size: state.shot_size,
+      subject: state.subject,
+      pass: state.pass,
+      motion: motionOf(state),
+      length: info.frames,
+      first_linked: info.firstLinked,
+      last_linked: info.lastLinked,
+      first_file: info.firstFile,
+      last_file: info.lastFile,
+    };
+    if (diagnosticId) request.diagnostic_id = diagnosticId;
     visionBusy = true;
     draftBtn.disabled = true;
     draftBtn.classList.add("busy");
@@ -988,22 +1009,7 @@ function setup(node, opts = null) {
       const response = await api.fetchApi("/h3i2v/vision", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          job: "draft",
-          loader,
-          instructions: instructionSettings(),
-          idea: state.idea,
-          style_mode: state.style_mode,
-          shot_size: state.shot_size,
-          subject: state.subject,
-          pass: state.pass,
-          motion: motionOf(state),
-          length: info.frames,
-          first_linked: info.firstLinked,
-          last_linked: info.lastLinked,
-          first_file: info.firstFile,
-          last_file: info.lastFile,
-        }),
+        body: JSON.stringify(request),
       });
       let body = {};
       try { body = await response.json(); } catch (e) { body = {}; }
@@ -1017,7 +1023,11 @@ function setup(node, opts = null) {
         ? "Draft ready. " + count + " format issue" + (count === 1 ? "" : "s") + ". Accept to edit, or discard.\n" + body.issues.join("\n")
         : "Draft ready. Accept or discard.";
     } catch (e) {
-      hint.textContent = e.message || "Draft failed.";
+      let message = e.message || "Draft failed.";
+      if (diagnosticId && !message.includes(diagnosticId)) {
+        message += ` (Hot Swap diagnostic ID: ${diagnosticId})`;
+      }
+      hint.textContent = message;
     } finally {
       finishClock();
     }

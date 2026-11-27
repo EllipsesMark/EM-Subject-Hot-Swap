@@ -435,12 +435,55 @@ try:
 
     @PromptServer.instance.routes.post("/h3subjectref/vision")
     async def _h3subjectref_vision(request):
+        import os
+        import time
+        import uuid
+
+        from ..diagnostics import log_diagnostic, valid_request_id
+
+        diagnostics = False
+        diagnostic_id = ""
+        started = time.monotonic()
         try:
             from .vision import answer
             data = await request.json()
+            loader = data.get("loader") if isinstance(data, dict) else {}
+            if not isinstance(loader, dict):
+                loader = {}
+            diagnostics = bool(loader.get("diagnostics"))
+            if diagnostics:
+                diagnostic_id = valid_request_id(data.get("diagnostic_id")) or uuid.uuid4().hex
+                data["diagnostic_id"] = diagnostic_id
+                model_name = str(loader.get("model_name") or loader.get("model") or "")
+                log_diagnostic(
+                    True, diagnostic_id, "request.start",
+                    job=data.get("job"),
+                    backend=str(loader.get("backend") or "gguf").lower(),
+                    model=os.path.basename(model_name),
+                    n_ctx=loader.get("n_ctx"),
+                    n_gpu_layers=loader.get("n_gpu_layers"),
+                    keep_loaded=bool(loader.get("keep_loaded")),
+                )
             result = await asyncio.get_running_loop().run_in_executor(None, lambda: answer(data))
+            if diagnostics:
+                log_diagnostic(
+                    True, diagnostic_id, "request.complete",
+                    elapsed_s=f"{time.monotonic() - started:.2f}",
+                )
+                if isinstance(result, dict):
+                    result["diagnostic_id"] = diagnostic_id
             return web.json_response(result)
         except Exception as exc:
-            return web.json_response({"error": str(exc)}, status=400)
+            if diagnostics:
+                log_diagnostic(
+                    True, diagnostic_id, "request.error",
+                    elapsed_s=f"{time.monotonic() - started:.2f}",
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+            body = {"error": str(exc)}
+            if diagnostic_id:
+                body["diagnostic_id"] = diagnostic_id
+            return web.json_response(body, status=400)
 except ImportError:
     pass

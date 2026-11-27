@@ -10,6 +10,11 @@ import os
 import re
 import threading
 
+try:
+    from ..diagnostics import log_diagnostic, valid_request_id
+except ImportError:
+    from diagnostics import log_diagnostic, valid_request_id
+
 from .assemble import (
     _CONCEPT_KEEP,
     _concept,
@@ -508,7 +513,7 @@ def _under_models(name):
     return path
 
 
-def loader_handle(loader, require_mmproj=True):
+def loader_handle(loader, require_mmproj=True, diagnostic_id=""):
     if not isinstance(loader, dict):
         raise ValueError("Connect LLM (GGUF) - Loader to the llm input and select a GGUF.")
     if str(loader.get("backend") or "gguf").lower() == "http":
@@ -517,6 +522,8 @@ def loader_handle(loader, require_mmproj=True):
             "base_url": str(loader.get("base_url") or "").strip(),
             "model": str(loader.get("model") or "local").strip() or "local",
             "api_key": str(loader.get("api_key") or "none").strip() or "none",
+            "diagnostics": bool(loader.get("diagnostics")),
+            "diagnostic_id": valid_request_id(diagnostic_id),
         }
     model_name = str(loader.get("model_name") or "").strip()
     mmproj_name = str(loader.get("mmproj_name") or "").strip()
@@ -550,6 +557,8 @@ def loader_handle(loader, require_mmproj=True):
         "n_ctx": n_ctx,
         "n_gpu_layers": n_gpu,
         "keep_loaded": bool(loader.get("keep_loaded")),
+        "diagnostics": bool(loader.get("diagnostics")),
+        "diagnostic_id": valid_request_id(diagnostic_id),
     }
 
 
@@ -668,7 +677,11 @@ def answer(data):
     """Run one Describe or Draft call. data is the JSON body from the panel."""
     if not isinstance(data, dict):
         data = {}
+    loader_data = data.get("loader") or {}
+    diagnostics = bool(loader_data.get("diagnostics")) if isinstance(loader_data, dict) else False
+    diagnostic_id = valid_request_id(data.get("diagnostic_id"))
     job = str(data.get("job") or "")
+    log_diagnostic(diagnostics, diagnostic_id, "vision.start", job=job)
     if job == "describe":
         filename = str(data.get("image") or "").strip()
         if not filename:
@@ -682,7 +695,9 @@ def answer(data):
             ))
         )
         if is_still:
-            handle = loader_handle(data.get("loader") or {}, require_mmproj=True)
+            handle = loader_handle(
+                data.get("loader") or {}, require_mmproj=True, diagnostic_id=diagnostic_id,
+            )
             still_ref = filename
             messages = [
                 {"role": "system", "content": _DESCRIBE_SYSTEM},
@@ -698,7 +713,7 @@ def answer(data):
         from .refmods import look_jpeg
         if not look_jpeg(filename, 0):
             return _describe_from_meta(filename, concept)
-        handle = loader_handle(data.get("loader") or {})
+        handle = loader_handle(data.get("loader") or {}, diagnostic_id=diagnostic_id)
         messages = [
             {"role": "system", "content": _DESCRIBE_SYSTEM},
             {"role": "user", "content": [
@@ -712,7 +727,10 @@ def answer(data):
         state = migrate_state(data.get("state") or {})
         develop = _developing(state)
         header, pictures = draft_request(state, data.get("length"))
-        handle = loader_handle(data.get("loader") or {}, require_mmproj=bool(pictures))
+        handle = loader_handle(
+            data.get("loader") or {}, require_mmproj=bool(pictures),
+            diagnostic_id=diagnostic_id,
+        )
         content = [{"type": "text", "text": header}]
         if pictures:
             content.extend(_image_parts(pictures))

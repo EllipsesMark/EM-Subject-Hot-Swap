@@ -8,6 +8,13 @@ There is no Describe call. The base guide has no card to fill.
 import os
 import re
 import threading
+import time
+import uuid
+
+try:
+    from ..diagnostics import log_diagnostic, valid_request_id
+except ImportError:
+    from diagnostics import log_diagnostic, valid_request_id
 
 from .prompt import detect_mode, duration_of, finish_prompt, load_writer
 
@@ -180,15 +187,19 @@ def _under_models(name):
     return path
 
 
-def loader_handle(loader):
+def loader_handle(loader, diagnostic_id=""):
     if not isinstance(loader, dict):
         raise ValueError("Connect LLM (GGUF) - Loader to the llm input and select a GGUF.")
+    diagnostics = bool(loader.get("diagnostics"))
+    diagnostic_id = valid_request_id(diagnostic_id)
     if str(loader.get("backend") or "gguf").lower() == "http":
         return {
             "backend": "http",
             "base_url": str(loader.get("base_url") or "").strip(),
             "model": str(loader.get("model") or "local").strip() or "local",
             "api_key": str(loader.get("api_key") or "none").strip() or "none",
+            "diagnostics": diagnostics,
+            "diagnostic_id": diagnostic_id,
         }
     model_name = str(loader.get("model_name") or "").strip()
     mmproj_name = str(loader.get("mmproj_name") or "").strip()
@@ -217,6 +228,8 @@ def loader_handle(loader):
         "n_ctx": n_ctx,
         "n_gpu_layers": n_gpu,
         "keep_loaded": bool(loader.get("keep_loaded")),
+        "diagnostics": diagnostics,
+        "diagnostic_id": diagnostic_id,
     }
 
 
@@ -299,19 +312,52 @@ def answer(data):
     """Run one Draft call. data is the JSON body from the panel."""
     if not isinstance(data, dict):
         data = {}
-    if str(data.get("job") or "draft") != "draft":
-        raise ValueError("Unknown vision job.")
-    handle = loader_handle(data.get("loader") or {})
-    messages, specs, meta = plan_draft(data)
-    messages[1]["content"].extend(_image_parts(specs))
-    _guides, assemble, _validate = load_writer()
-    raw = _chat(handle, messages)
-    assembled = assemble.assemble_base_prompt(
-        meta["mode"], meta["duration"], meta["style"], meta["shot"], raw, meta["subject"],
-    )
-    finished = finish_prompt(assembled, meta["mode"], meta["duration"])
-    return {
+    loader = data.get("loader") if isinstance(data.get("loader"), dict) else {}
+    diagnostics = bool(loader.get("diagnostics"))
+    diagnostic_id = valid_request_id(data.get("diagnostic_id"))
+    if diagnostics and not diagnostic_id:
+        diagnostic_id = uuid.uuid4().hex
+    started = time.monotonic()
+    if diagnostics:
+        model = str(loader.get("model_name") or loader.get("model") or "")
+        log_diagnostic(
+            True, diagnostic_id, "request.start",
+            job=str(data.get("job") or "draft"),
+            backend=str(loader.get("backend") or "gguf").lower(),
+            model=os.path.basename(model), n_ctx=loader.get("n_ctx"),
+            n_gpu_layers=loader.get("n_gpu_layers"),
+            keep_loaded=bool(loader.get("keep_loaded")),
+        )
+    try:
+        if str(data.get("job") or "draft") != "draft":
+            raise ValueError("Unknown vision job.")
+        handle = loader_handle(loader, diagnostic_id)
+        messages, specs, meta = plan_draft(data)
+        messages[1]["content"].extend(_image_parts(specs))
+        _guides, assemble, _validate = load_writer()
+        raw = _chat(handle, messages)
+        assembled = assemble.assemble_base_prompt(
+            meta["mode"], meta["duration"], meta["style"], meta["shot"], raw, meta["subject"],
+        )
+        finished = finish_prompt(assembled, meta["mode"], meta["duration"])
+    except Exception as exc:
+        if diagnostics:
+            log_diagnostic(
+                True, diagnostic_id, "request.error",
+                elapsed_s=f"{time.monotonic() - started:.2f}",
+                error_type=type(exc).__name__, error=str(exc),
+            )
+        raise
+    if diagnostics:
+        log_diagnostic(
+            True, diagnostic_id, "request.complete",
+            elapsed_s=f"{time.monotonic() - started:.2f}",
+        )
+    result = {
         "prompt": finished["prompt"],
         "report": _report(meta, finished["notes"], finished["issues"]),
         "issues": finished["issues"],
     }
+    if diagnostics:
+        result["diagnostic_id"] = diagnostic_id
+    return result

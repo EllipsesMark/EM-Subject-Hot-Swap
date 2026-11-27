@@ -12,7 +12,13 @@ import gc
 import json
 import os
 import struct
+import time
 import urllib.request
+
+try:
+    from ..diagnostics import log_diagnostic
+except ImportError:
+    from diagnostics import log_diagnostic
 
 _CACHE = {"key": None, "llama": None, "handler": None}
 
@@ -158,9 +164,14 @@ def _load_attempts(n_ctx):
     return attempts
 
 
-def _load(model_path, mmproj_path, n_ctx, n_gpu_layers):
+def _load(model_path, mmproj_path, n_ctx, n_gpu_layers, diagnostics=False, diagnostic_id=""):
     key = (model_path, mmproj_path, n_ctx, n_gpu_layers)
     if _CACHE["key"] == key and _CACHE["llama"] is not None:
+        log_diagnostic(
+            diagnostics, diagnostic_id, "model.cache_hit",
+            model=os.path.basename(model_path), n_ctx=n_ctx,
+            n_gpu_layers=n_gpu_layers,
+        )
         return _CACHE["llama"]
     unload()
     _free_comfy_models()
@@ -188,6 +199,13 @@ def _load(model_path, mmproj_path, n_ctx, n_gpu_layers):
             f"({os.path.basename(model_path)}, {desc})",
             flush=True,
         )
+        attempt_started = time.monotonic()
+        log_diagnostic(
+            diagnostics, diagnostic_id, "model.load.start",
+            model=os.path.basename(model_path), mmproj=bool(mmproj_path),
+            n_ctx=ctx, kv_type="q8_0" if "type_k" in options else "default",
+            n_gpu_layers=n_gpu_layers,
+        )
         try:
             llama = Llama(
                 model_path=model_path,
@@ -198,6 +216,12 @@ def _load(model_path, mmproj_path, n_ctx, n_gpu_layers):
             )
         except Exception as exc:
             errors.append(f"{desc}: {exc}")
+            log_diagnostic(
+                diagnostics, diagnostic_id, "model.load.error",
+                model=os.path.basename(model_path), n_ctx=ctx,
+                elapsed_s=f"{time.monotonic() - attempt_started:.2f}",
+                error_type=type(exc).__name__, error=str(exc),
+            )
             gc.collect()
             _free_comfy_models()
             continue
@@ -208,6 +232,12 @@ def _load(model_path, mmproj_path, n_ctx, n_gpu_layers):
                 flush=True,
             )
         _CACHE.update({"key": key, "llama": llama, "handler": handler})
+        log_diagnostic(
+            diagnostics, diagnostic_id, "model.load.complete",
+            model=os.path.basename(model_path), n_ctx=ctx,
+            elapsed_s=f"{time.monotonic() - attempt_started:.2f}",
+            n_gpu_layers=n_gpu_layers,
+        )
         return llama
 
     raise LocalLLMError(
@@ -230,14 +260,37 @@ def chat_local(handle, messages, temperature=0.4, max_tokens=3072, seed=-1):
             "mmproj (vision projector). Pick a VLM + its mmproj in the "
             "LLM (GGUF) - Loader.")
 
-    llama = _load(handle["model_path"], handle.get("mmproj_path"),
-                  handle.get("n_ctx", 16384), handle.get("n_gpu_layers", -1))
+    diagnostics = bool(handle.get("diagnostics"))
+    diagnostic_id = handle.get("diagnostic_id") or ""
+    llama = _load(
+        handle["model_path"], handle.get("mmproj_path"),
+        handle.get("n_ctx", 16384), handle.get("n_gpu_layers", -1),
+        diagnostics=diagnostics, diagnostic_id=diagnostic_id,
+    )
     kwargs = {"messages": messages, "temperature": temperature,
               "max_tokens": max_tokens}
     if seed >= 0:
         kwargs["seed"] = seed
+    inference_started = time.monotonic()
+    log_diagnostic(
+        diagnostics, diagnostic_id, "inference.start",
+        model=os.path.basename(handle["model_path"]),
+        max_tokens=max_tokens, has_images=has_images,
+    )
     try:
         out = llama.create_chat_completion(**kwargs)
+    except Exception as exc:
+        log_diagnostic(
+            diagnostics, diagnostic_id, "inference.error",
+            elapsed_s=f"{time.monotonic() - inference_started:.2f}",
+            error_type=type(exc).__name__, error=str(exc),
+        )
+        raise
+    else:
+        log_diagnostic(
+            diagnostics, diagnostic_id, "inference.complete",
+            elapsed_s=f"{time.monotonic() - inference_started:.2f}",
+        )
     finally:
         handler = _CACHE["handler"]
         if not handle.get("keep_loaded", False):
@@ -270,11 +323,27 @@ def chat_http(handle, messages, temperature=0.4, max_tokens=3072, seed=-1):
         data=json.dumps(body).encode("utf-8"),
         headers=headers,
     )
+    diagnostics = bool(handle.get("diagnostics"))
+    diagnostic_id = handle.get("diagnostic_id") or ""
+    request_started = time.monotonic()
+    log_diagnostic(
+        diagnostics, diagnostic_id, "http_llm.start",
+        model=body["model"], max_tokens=max_tokens,
+    )
     try:
         with urllib.request.urlopen(request, timeout=600) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except Exception as exc:
+        log_diagnostic(
+            diagnostics, diagnostic_id, "http_llm.error",
+            elapsed_s=f"{time.monotonic() - request_started:.2f}",
+            error_type=type(exc).__name__, error=str(exc),
+        )
         raise LocalLLMError(f"HTTP LLM request failed: {exc}") from exc
+    log_diagnostic(
+        diagnostics, diagnostic_id, "http_llm.complete",
+        elapsed_s=f"{time.monotonic() - request_started:.2f}",
+    )
     try:
         content = payload["choices"][0]["message"]["content"] or ""
     except (KeyError, IndexError, TypeError) as exc:

@@ -2619,6 +2619,7 @@ function setup(node, opts = null) {
       n_ctx: Number(widget("n_ctx")?.value) || 16384,
       n_gpu_layers: widget("n_gpu_layers") ? Number(widget("n_gpu_layers").value) : -1,
       keep_loaded: !!widget("keep_loaded")?.value,
+      diagnostics: !!widget("diagnostics")?.value,
       base_url: widget("base_url")?.value || "http://localhost:1234/v1",
       model: widget("model")?.value || "local",
       api_key: widget("api_key")?.value || "none",
@@ -2626,15 +2627,30 @@ function setup(node, opts = null) {
   }
 
   async function askVision(payload) {
-    const response = await api.fetchApi("/h3subjecthybrid/vision", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(Object.assign({ loader: loaderSettings() || {} }, payload)),
-    });
-    let body = {};
-    try { body = await response.json(); } catch (e) { body = {}; }
-    if (!response.ok || body.error) throw new Error(body.error || "Writer failed.");
-    return body;
+    const loader = loaderSettings();
+    if (!loader) throw new Error("Connect LLM (GGUF) - Loader to the llm input.");
+    const diagnosticId = loader.diagnostics
+      ? (globalThis.crypto?.randomUUID?.() || `hs-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`)
+      : "";
+    const request = Object.assign({ loader }, payload);
+    if (diagnosticId) request.diagnostic_id = diagnosticId;
+    try {
+      const response = await api.fetchApi("/h3subjecthybrid/vision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+      let body = {};
+      try { body = await response.json(); } catch (e) { body = {}; }
+      if (!response.ok || body.error) throw new Error(body.error || "Writer failed.");
+      return body;
+    } catch (error) {
+      const message = error?.message || "Writer failed.";
+      if (diagnosticId && !message.includes(diagnosticId)) {
+        throw new Error(`${message} (Hot Swap diagnostic ID: ${diagnosticId})`);
+      }
+      throw error;
+    }
   }
 
   async function describeRow(row) {

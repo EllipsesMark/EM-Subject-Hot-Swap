@@ -641,11 +641,74 @@ def test_llm_loader_configures_http_handle_without_gguf():
 
     (handle,) = H3PromptLLMLoader().configure(
         "HTTP", "(no gguf found)", "none", 8192, -1, False,
-        "http://localhost:1234/v1", "local-test", "none",
+        "http://localhost:1234/v1", "local-test", "none", False,
     )
     assert handle["backend"] == "http"
     assert handle["base_url"] == "http://localhost:1234/v1"
     assert handle["model"] == "local-test"
+    assert handle["diagnostics"] is False
+
+
+def test_llm_loader_exposes_opt_in_diagnostics():
+    from h3_llm.loader import H3PromptLLMLoader
+
+    (handle,) = H3PromptLLMLoader().configure(
+        "HTTP", "(no gguf found)", "none", 8192, -1, False,
+        "http://localhost:1234/v1", "local-test", "none", True,
+    )
+    assert handle["diagnostics"] is True
+    inputs = H3PromptLLMLoader.INPUT_TYPES()["required"]
+    assert inputs["diagnostics"][1]["default"] is False
+
+
+def test_diagnostic_request_id_validation():
+    from diagnostics import valid_request_id
+
+    assert valid_request_id("123e4567-e89b-12d3-a456-426614174000")
+    assert valid_request_id("bad id") == ""
+
+
+def test_diagnostics_path_falls_back_when_user_dir_is_none():
+    import sys
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from diagnostics import diagnostics_log_path
+
+    folder_paths = SimpleNamespace(get_user_directory=lambda: None)
+    with patch.dict(sys.modules, {"folder_paths": folder_paths}):
+        path = diagnostics_log_path()
+    expected = Path(__file__).parent.parent.parent / "user" / "hot_swap_diagnostics.log"
+    assert Path(path) == expected
+
+
+def test_i2v_loader_handle_forwards_diagnostics_and_request_id():
+    from h3_i2v.vision import loader_handle
+
+    handle = loader_handle({
+        "backend": "HTTP",
+        "base_url": "http://localhost:1234/v1",
+        "model": "local-test",
+        "diagnostics": True,
+    }, "123e4567-e89b-12d3-a456-426614174000")
+    assert handle["diagnostics"] is True
+    assert handle["diagnostic_id"] == "123e4567-e89b-12d3-a456-426614174000"
+
+
+def test_all_llm_panels_forward_diagnostics_and_request_ids():
+    from pathlib import Path
+
+    web = Path(__file__).parent / "web"
+    panels = (
+        "h3_subject_prompt_ref.js",
+        "h3_subject_prompt_refmod.js",
+        "h3_subject_prompt_hybrid.js",
+        "h3_i2v.js",
+    )
+    for panel in panels:
+        source = (web / panel).read_text(encoding="utf-8")
+        assert 'diagnostics: !!widget("diagnostics")?.value' in source, panel
+        assert "request.diagnostic_id = diagnosticId" in source, panel
+        assert "Hot Swap diagnostic ID" in source, panel
 
 
 def test_http_chat_uses_openai_compatible_route():
