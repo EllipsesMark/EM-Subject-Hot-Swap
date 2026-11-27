@@ -251,7 +251,8 @@ def preview_from_vae(name, vae):
 
     # Same contract as MiniMaxH3RefModInspect: decode the sliced latent, then
     # normalize to an IMAGE batch [T,H,W,3] / [B,H,W,3].
-    pixels = vae.decode(z)
+    with torch.inference_mode():
+        pixels = vae.decode(z)
     del z
     if pixels.ndim == 5 and pixels.shape[0] == 1:
         pixels = pixels[0]
@@ -487,7 +488,7 @@ def ensure_token_looks(name, vae=None, *, visuals=None, decode=True):
             if os.path.isfile(target):
                 continue
             z = latent[:, :, t:t + 1].contiguous()
-            with torch.no_grad():
+            with torch.inference_mode():
                 pixels = decoder.decode(z)
             if pixels.ndim == 5 and pixels.shape[0] == 1:
                 pixels = pixels[0]
